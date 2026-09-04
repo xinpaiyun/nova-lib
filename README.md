@@ -27,11 +27,15 @@
 
 | 包 | 说明 | 状态 |
 |---|---|---|
-| `sms` | 阿里云短信验证码 | ✅ 已迁入（模板版） |
-| `wechat` | 小程序登录 + 微信支付 V3 | ✅ 已迁入（模板版，业务项目分叉版待合并） |
-| `storage` | 本地/S3 兼容对象存储 | ✅ 已迁入（模板版，baoxian OSS 752 行版待合并） |
+| `sms` | 阿里云短信验证码 | ✅ v1.0.0 |
+| `wechat` | 小程序登录 + 微信支付 V3 | ✅ v1.0.0 |
+| `storage` | 本地/S3 兼容对象存储（含临时 URL、对象移动） | ✅ v1.0.0 |
 | `mail` | SMTP 邮件 | ✅ 已迁入 |
-| `alipay` / `tencentmap` / `shengwang` / `aliyunocr` / `openai` | 支付宝、腾讯地图、声网、OCR、LLM | ⏳ 待从 xingxueji/baoxian 抽取 |
+| `alipay` | 支付宝开放平台：OAuth 登录、手机号解密、JSAPI 交易创建/查询、通知验签（RSA2 + AES-CBC，纯标准库） | ✅ v1.1.0 |
+| `tencentmap` | 腾讯位置服务：逆地理编码（sig 签名 + Redis 缓存） | ✅ v1.1.0 |
+| `ocr` | 阿里云 OCR：通用文字 / 身份证 / 行驶证识别（URL 与二进制流） | ✅ v1.1.0 |
+| `openai` | OpenAI 兼容协议：文本与视觉对话（含 token 用量统计） | ✅ v1.1.0 |
+| `shengwang` | 声网：RTC/灵动课堂 token 签发、实时转写任务 | ✅ v1.1.0 |
 
 ### 平台能力
 
@@ -52,8 +56,9 @@
    - `storage`：Store 接口新增 `PresignGetURL` / `MoveFile`（源自 xingxueji 私有桶与临时 URL 能力），S3 客户端启用 `RequestChecksumCalculationWhenRequired`（阿里云 OSS S3 兼容必需，源自 baoxian 踩坑）
    - `wechat`：Client 升级为标准微信 API 超集——`Session`（完整 code2session 响应）、`FetchPhoneNumber`（自动 access_token 换取手机号）、`AccessToken`（Redis 缓存 + 临期刷新）、`GenerateUnlimitedQRCode`（小程序码）、`SendSubscribeMessage`（订阅消息）；`Code2Session` 旧签名保留兼容。Pay 维持 wechatpay-go 标准 V3 实现（双端 appid 等业务定制不进库）
    - `sms`：模板版已是超集（返回验证码、原子 GetDel、租户级配置），业务版无需合并
-4. ⏳ **存量项目逐个切换**：baoxian → xingxueji → lvyouji → 其余，按迭代节奏替换 import 并删除本地副本。
-5. ⏳ **前端包**：`@xinpaiyun/nova-request`、`@xinpaiyun/nova-session` 等发内部 npm registry（不在本仓库）。
+4. ✅ **缺失能力补全**（v1.1.0）：从业务项目抽取 `alipay`（单应用标准版，去除双端 appType）、`tencentmap`、`ocr`（baoxian 超集版）、`openai`（含 token 用量）、`shengwang`（含官方 token 算法）；`cache` 新增 `SetJSON`/`GetJSON`；`config` 新增 `AlipayConfig`/`TencentMapConfig`/`ShengwangConfig`，`AIConfig` 补 `Model`/`TimeoutSec`
+5. ⏳ **存量项目逐个切换**：✅ chongyuji（response）→ lvyouji → chehuixing → xingxueji → baoxian，按迭代节奏替换 import 并删除本地副本。
+6. ⏳ **前端包**：`@xinpaiyun/nova-request`、`@xinpaiyun/nova-session` 等发内部 npm registry（不在本仓库）。
 
 ## 开发
 

@@ -3,6 +3,7 @@ package cache
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -69,4 +70,26 @@ func Del(ctx context.Context, key string) error {
 	}
 	memoryStore.Delete(key)
 	return nil
+}
+
+// SetJSON 将对象序列化为 JSON 后写入缓存。
+func SetJSON(ctx context.Context, key string, value any, ttl time.Duration) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return Set(ctx, key, string(data), ttl)
+}
+
+// GetJSON 读取缓存并反序列化到 out；未命中时返回 false。
+func GetJSON(ctx context.Context, key string, out any) (bool, error) {
+	raw, err := Get(ctx, key)
+	if err != nil || raw == "" {
+		return false, nil
+	}
+	if err := json.Unmarshal([]byte(raw), out); err != nil {
+		_ = Del(ctx, key)
+		return false, err
+	}
+	return true, nil
 }

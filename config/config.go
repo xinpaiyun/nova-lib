@@ -143,8 +143,47 @@ type AIConfig struct {
 	Enabled     bool   `yaml:"enabled"`
 	BaseURL     string `yaml:"base_url"`
 	APIKey      string `yaml:"api_key"`
+	Model       string `yaml:"model"`
 	TextModel   string `yaml:"text_model"`
 	VisionModel string `yaml:"vision_model"`
+	TimeoutSec  int    `yaml:"timeout_sec"`
+}
+
+// AlipayConfig 定义支付宝小程序开放平台参数。
+type AlipayConfig struct {
+	AppID          string `yaml:"app_id"`
+	PrivateKey     string `yaml:"private_key"`
+	PrivateKeyPath string `yaml:"private_key_path"`
+	PublicKey      string `yaml:"public_key"`
+	PublicKeyPath  string `yaml:"public_key_path"`
+	EncryptKey     string `yaml:"encrypt_key"`
+	GatewayURL     string `yaml:"gateway_url"`
+	NotifyURL      string `yaml:"notify_url"`
+}
+
+// TencentMapConfig 定义腾讯位置服务 WebService API 配置。
+type TencentMapConfig struct {
+	WebServiceKey string `yaml:"webservice_key"`
+	WebServiceSK  string `yaml:"webservice_sk"`
+}
+
+// ShengwangConfig 定义声网 RTC 与实时语音转写配置。
+type ShengwangConfig struct {
+	Enabled               bool   `yaml:"enabled"`
+	AppID                 string `yaml:"app_id"`
+	AppCertificate        string `yaml:"app_certificate"`
+	CustomerKey           string `yaml:"customer_key"`
+	CustomerSecret        string `yaml:"customer_secret"`
+	Region                string `yaml:"region"`
+	APIBaseURL            string `yaml:"api_base_url"`
+	SDKDomain             string `yaml:"sdk_domain"`
+	WebSDKVersion         string `yaml:"web_sdk_version"`
+	JoinLinkSecret        string `yaml:"join_link_secret"`
+	TokenExpireSeconds    int    `yaml:"token_expire_seconds"`
+	RoomCloseDelaySeconds int    `yaml:"room_close_delay_seconds"`
+	STTEnabled            bool   `yaml:"stt_enabled"`
+	STTLanguage           string `yaml:"stt_language"`
+	STTMaxIdleSeconds     int    `yaml:"stt_max_idle_seconds"`
 }
 
 // AllowsWildcard 返回 CORS 配置是否允许任意来源。

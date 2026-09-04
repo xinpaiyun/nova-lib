@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -19,6 +20,12 @@ import (
 )
 
 var defaultStore Store
+
+// 编译期保证两种存储实现满足 Store 接口。
+var (
+	_ Store = (*LocalStore)(nil)
+	_ Store = (*S3Store)(nil)
+)
 
 // UploadOptions 描述上传对象的业务归属。
 type UploadOptions struct {
@@ -39,6 +46,8 @@ type Store interface {
 	Upload(ctx context.Context, file io.Reader, filename string, contentLength int64, opts UploadOptions) (UploadResult, error)
 	Delete(ctx context.Context, objectKey string) error
 	PublicURL(objectKey string) string
+	PresignGetURL(ctx context.Context, objectKey string, ttl time.Duration) (string, error)
+	MoveFile(ctx context.Context, sourceKey, targetKey string) (string, error)
 	Enabled() bool
 }
 
@@ -82,16 +91,12 @@ func PublicURL(objectKey string) string {
 }
 
 // LocalFilePath 返回本地存储文件路径，用于开发环境文件代理。
-func LocalFilePath(filename string) (string, bool) {
+func LocalFilePath(objectKey string) (string, bool) {
 	store, ok := defaultStore.(*LocalStore)
 	if !ok || store == nil {
 		return "", false
 	}
-	cleanName := filepath.Base(normalizeObjectKey(filename))
-	if cleanName == "." || cleanName == "" {
-		return "", false
-	}
-	return filepath.Join(store.dir, cleanName), true
+	return store.localPath(objectKey)
 }
 
 // LocalFilePathWithDir 返回指定本地目录下的文件路径。
@@ -123,7 +128,7 @@ func NewLocalStore(dir, baseURL string) (*LocalStore, error) {
 	return &LocalStore{dir: dir, baseURL: strings.TrimRight(baseURL, "/")}, nil
 }
 
-// Upload 保存文件到本地目录。
+// Upload 保存文件到本地目录（本地布局按文件名平铺，与对象键层级无关）。
 func (s *LocalStore) Upload(_ context.Context, file io.Reader, filename string, _ int64, opts UploadOptions) (UploadResult, error) {
 	objectKey := buildObjectKey(filename, opts)
 	savePath := filepath.Join(s.dir, filepath.Base(objectKey))
@@ -164,6 +169,45 @@ func (s *LocalStore) Enabled() bool {
 	return s != nil && s.dir != ""
 }
 
+// PresignGetURL 返回本地存储文件的访问地址（本地模式无需签名）。
+func (s *LocalStore) PresignGetURL(_ context.Context, objectKey string, _ time.Duration) (string, error) {
+	if !s.Enabled() {
+		return "", fmt.Errorf("本地文件存储未初始化")
+	}
+	return s.PublicURL(objectKey), nil
+}
+
+// MoveFile 将本地存储文件移动到新的对象键，并返回新的访问地址。
+func (s *LocalStore) MoveFile(_ context.Context, sourceKey, targetKey string) (string, error) {
+	if !s.Enabled() {
+		return "", fmt.Errorf("本地文件存储未初始化")
+	}
+	sourcePath, ok := s.localPath(sourceKey)
+	if !ok {
+		return "", fmt.Errorf("source object key 不合法")
+	}
+	targetPath, ok := s.localPath(targetKey)
+	if !ok {
+		return "", fmt.Errorf("target object key 不合法")
+	}
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.Rename(sourcePath, targetPath); err != nil {
+		return "", err
+	}
+	return s.PublicURL(normalizeObjectKey(targetKey)), nil
+}
+
+// localPath 返回对象键对应的本地文件路径（平铺布局，取文件名，禁止目录穿越）。
+func (s *LocalStore) localPath(objectKey string) (string, bool) {
+	filename := filepath.Base(normalizeObjectKey(objectKey))
+	if filename == "." || filename == "" {
+		return "", false
+	}
+	return filepath.Join(s.dir, filename), true
+}
+
 // S3Store 实现 S3 兼容对象存储。
 type S3Store struct {
 	cfg    config.StorageConfig
@@ -173,7 +217,7 @@ type S3Store struct {
 // NewS3Store 创建 S3 兼容对象存储适配器。
 func NewS3Store(cfg config.StorageConfig) (*S3Store, error) {
 	if strings.TrimSpace(cfg.BucketName) == "" {
-		return nil, fmt.Errorf("APP_OSS_BUCKET_NAME 未配置")
+		return nil, fmt.Errorf("storage.bucket_name 未配置")
 	}
 	awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(),
 		awsconfig.WithRegion(cfg.Region),
@@ -187,6 +231,8 @@ func NewS3Store(cfg config.StorageConfig) (*S3Store, error) {
 		if endpoint := strings.TrimSpace(cfg.Endpoint); endpoint != "" {
 			options.BaseEndpoint = &endpoint
 		}
+		// 阿里云 OSS S3 兼容层不支持 SDK 默认的 aws-chunked 校验和上传。
+		options.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 	})
 	return &S3Store{cfg: cfg, client: client}, nil
 }
@@ -247,6 +293,55 @@ func (s *S3Store) PublicURL(objectKey string) string {
 // Enabled 返回 S3 存储是否可用。
 func (s *S3Store) Enabled() bool {
 	return s != nil && s.client != nil
+}
+
+// PresignGetURL 生成对象临时访问地址。
+func (s *S3Store) PresignGetURL(ctx context.Context, objectKey string, ttl time.Duration) (string, error) {
+	key := normalizeObjectKey(objectKey)
+	if key == "" {
+		return "", fmt.Errorf("object key 不能为空")
+	}
+	if !s.Enabled() {
+		return "", fmt.Errorf("对象存储未初始化")
+	}
+	if ttl <= 0 {
+		ttl = 5 * time.Minute
+	}
+	out, err := s3.NewPresignClient(s.client).PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: &s.cfg.BucketName,
+		Key:    &key,
+	}, s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", err
+	}
+	return out.URL, nil
+}
+
+// MoveFile 将已有对象复制到新的对象键并删除源对象，返回新的访问地址。
+func (s *S3Store) MoveFile(ctx context.Context, sourceKey, targetKey string) (string, error) {
+	source := normalizeObjectKey(sourceKey)
+	target := normalizeObjectKey(targetKey)
+	if source == "" || target == "" {
+		return "", fmt.Errorf("source 与 target object key 均不能为空")
+	}
+	if !s.Enabled() {
+		return "", fmt.Errorf("对象存储未初始化")
+	}
+	if source == target {
+		return s.PublicURL(target), nil
+	}
+	copySource := strings.ReplaceAll(url.PathEscape(s.cfg.BucketName+"/"+source), "%2F", "/")
+	if _, err := s.client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:     &s.cfg.BucketName,
+		Key:        &target,
+		CopySource: &copySource,
+	}); err != nil {
+		return "", err
+	}
+	if err := s.Delete(ctx, source); err != nil {
+		return "", err
+	}
+	return s.PublicURL(target), nil
 }
 
 // buildObjectKey 生成稳定的对象键路径。

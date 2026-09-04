@@ -48,7 +48,10 @@
 
 1. ✅ **骨架 + 模板基线包迁入**（本仓库当前状态，以 nova 模板 `internal/shared` 为基线，代码带测试）。
 2. ✅ **nova 模板切换依赖**（v0.1.0）：模板 `internal/shared` 已删除迁入的 17 个包并改为 `import github.com/xinpaiyun/nova-lib/...`，config 基础结构体改为 nova-lib 类型别名，新项目生成即受益。
-3. ⏳ **业务项目分叉版合并**：按包评审 baoxian / xingxueji 的差异实现（优先 `wechat/pay`、`storage/oss`、`sms`），以功能超集合并进 nova-lib，打 `v1.0.0` tag。
+3. ✅ **业务项目分叉版合并**（v1.0.0）：
+   - `storage`：Store 接口新增 `PresignGetURL` / `MoveFile`（源自 xingxueji 私有桶与临时 URL 能力），S3 客户端启用 `RequestChecksumCalculationWhenRequired`（阿里云 OSS S3 兼容必需，源自 baoxian 踩坑）
+   - `wechat`：Client 升级为标准微信 API 超集——`Session`（完整 code2session 响应）、`FetchPhoneNumber`（自动 access_token 换取手机号）、`AccessToken`（Redis 缓存 + 临期刷新）、`GenerateUnlimitedQRCode`（小程序码）、`SendSubscribeMessage`（订阅消息）；`Code2Session` 旧签名保留兼容。Pay 维持 wechatpay-go 标准 V3 实现（双端 appid 等业务定制不进库）
+   - `sms`：模板版已是超集（返回验证码、原子 GetDel、租户级配置），业务版无需合并
 4. ⏳ **存量项目逐个切换**：baoxian → xingxueji → lvyouji → 其余，按迭代节奏替换 import 并删除本地副本。
 5. ⏳ **前端包**：`@xinpaiyun/nova-request`、`@xinpaiyun/nova-session` 等发内部 npm registry（不在本仓库）。
 

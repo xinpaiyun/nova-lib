@@ -47,7 +47,7 @@
 ## 迁移路线图
 
 1. ✅ **骨架 + 模板基线包迁入**（本仓库当前状态，以 nova 模板 `internal/shared` 为基线，代码带测试）。
-2. ⏳ **nova 模板切换依赖**：模板 `internal/shared` 删除已迁入的包，改为 `import github.com/xinpaiyun/nova-lib/...`，新项目生成即受益。
+2. ✅ **nova 模板切换依赖**（v0.1.0）：模板 `internal/shared` 已删除迁入的 17 个包并改为 `import github.com/xinpaiyun/nova-lib/...`，config 基础结构体改为 nova-lib 类型别名，新项目生成即受益。
 3. ⏳ **业务项目分叉版合并**：按包评审 baoxian / xingxueji 的差异实现（优先 `wechat/pay`、`storage/oss`、`sms`），以功能超集合并进 nova-lib，打 `v1.0.0` tag。
 4. ⏳ **存量项目逐个切换**：baoxian → xingxueji → lvyouji → 其余，按迭代节奏替换 import 并删除本地副本。
 5. ⏳ **前端包**：`@xinpaiyun/nova-request`、`@xinpaiyun/nova-session` 等发内部 npm registry（不在本仓库）。

@@ -12,6 +12,13 @@ import (
 )
 
 var memoryStore sync.Map
+var memoryFallbackEnabled = true
+
+// DisableMemoryFallback 关闭进程内存回退缓存；Redis 未启用时所有读写按 miss 处理。
+// 供测试包在 TestMain 中调用，避免跨测试的内存状态污染。
+func DisableMemoryFallback() {
+	memoryFallbackEnabled = false
+}
 
 type memoryItem struct {
 	value     string
@@ -26,6 +33,9 @@ func Set(ctx context.Context, key, value string, ttl time.Duration) error {
 	if client := redis.Client(); client != nil {
 		return client.Set(ctx, key, value, ttl).Err()
 	}
+	if !memoryFallbackEnabled {
+		return nil
+	}
 	memoryStore.Store(key, memoryItem{value: value, expiresAt: time.Now().Add(ttl)})
 	return nil
 }
@@ -34,6 +44,9 @@ func Set(ctx context.Context, key, value string, ttl time.Duration) error {
 func Get(ctx context.Context, key string) (string, error) {
 	if client := redis.Client(); client != nil {
 		return client.Get(ctx, key).Result()
+	}
+	if !memoryFallbackEnabled {
+		return "", ErrMiss
 	}
 	raw, ok := memoryStore.Load(key)
 	if !ok {
@@ -52,6 +65,9 @@ func GetDel(ctx context.Context, key string) (string, error) {
 	if client := redis.Client(); client != nil {
 		return client.GetDel(ctx, key).Result()
 	}
+	if !memoryFallbackEnabled {
+		return "", ErrMiss
+	}
 	raw, ok := memoryStore.LoadAndDelete(key)
 	if !ok {
 		return "", ErrMiss
@@ -67,6 +83,9 @@ func GetDel(ctx context.Context, key string) (string, error) {
 func Del(ctx context.Context, key string) error {
 	if client := redis.Client(); client != nil {
 		return client.Del(ctx, key).Err()
+	}
+	if !memoryFallbackEnabled {
+		return nil
 	}
 	memoryStore.Delete(key)
 	return nil

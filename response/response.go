@@ -23,6 +23,11 @@ func Success(c *app.RequestContext, data any) {
 	c.JSON(200, Body{Code: 0, ErrorCode: apperror.CodeOK, Message: "成功", Data: data, RequestID: requestID(c)})
 }
 
+// Created 写入资源创建成功响应（HTTP 201）。
+func Created(c *app.RequestContext, data any) {
+	c.JSON(201, Body{Code: 0, ErrorCode: apperror.CodeOK, Message: "created", Data: data, RequestID: requestID(c)})
+}
+
 // Error 写入统一失败响应。
 func Error(c *app.RequestContext, status int, message string) {
 	appErr := apperror.New(status, message)

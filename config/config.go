@@ -113,6 +113,7 @@ type WechatConfig struct {
 	AppSecret     string `yaml:"app_secret"`
 	MchID         string `yaml:"mch_id"`
 	APIKeyV3      string `yaml:"api_key_v3"`
+	APIBaseURL    string `yaml:"api_base_url"`
 	CertPath      string `yaml:"cert_path"`
 	CertSerialNo  string `yaml:"cert_serial_no"`
 	PublicKeyPath string `yaml:"public_key_path"`

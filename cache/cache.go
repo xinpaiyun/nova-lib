@@ -72,6 +72,14 @@ func Del(ctx context.Context, key string) error {
 	return nil
 }
 
+// Flush 清空进程内存回退缓存；Redis 模式下为空操作，避免误清远端数据。
+func Flush() {
+	memoryStore.Range(func(key, _ any) bool {
+		memoryStore.Delete(key)
+		return true
+	})
+}
+
 // SetJSON 将对象序列化为 JSON 后写入缓存。
 func SetJSON(ctx context.Context, key string, value any, ttl time.Duration) error {
 	data, err := json.Marshal(value)

@@ -74,6 +74,11 @@ type RateLimitConfig struct {
 	TrustForwardedIP bool `yaml:"trust_forwarded_ip"`
 }
 
+// SecurityHeadersConfig 定义 HTTP 安全响应头配置。
+type SecurityHeadersConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
 // TenancyConfig 定义 SaaS、多租户和用户租户隔离业务形态。
 type TenancyConfig struct {
 	SaaSEnabled                bool `yaml:"saas_enabled"`

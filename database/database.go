@@ -12,6 +12,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/xinpaiyun/nova-lib/config"
+	"github.com/xinpaiyun/nova-lib/logging"
 )
 
 var db *gorm.DB
@@ -22,7 +23,11 @@ func Init(cfg config.DatabaseConfig) error {
 	if err != nil {
 		return err
 	}
-	conn, err := gorm.Open(dialector, &gorm.Config{})
+	conn, err := gorm.Open(dialector, &gorm.Config{
+		SkipDefaultTransaction:                   true,
+		Logger:                                   logging.NewGormLogger(),
+		DisableForeignKeyConstraintWhenMigrating: true,
+	})
 	if err != nil {
 		return err
 	}
@@ -44,15 +49,22 @@ func applyPoolConfig(sqlDB interface {
 	SetMaxIdleConns(int)
 	SetConnMaxLifetime(time.Duration)
 }, cfg config.DatabaseConfig) {
-	if cfg.MaxOpenConns > 0 {
-		sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
+	// 未显式配置时使用统一默认值，避免漏配导致连接无上限。
+	maxOpen := cfg.MaxOpenConns
+	if maxOpen <= 0 {
+		maxOpen = 100
 	}
-	if cfg.MaxIdleConns > 0 {
-		sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
+	maxIdle := cfg.MaxIdleConns
+	if maxIdle <= 0 {
+		maxIdle = 10
 	}
-	if cfg.ConnMaxLifetimeMinutes > 0 {
-		sqlDB.SetConnMaxLifetime(time.Duration(cfg.ConnMaxLifetimeMinutes) * time.Minute)
+	lifetimeMinutes := cfg.ConnMaxLifetimeMinutes
+	if lifetimeMinutes <= 0 {
+		lifetimeMinutes = 60
 	}
+	sqlDB.SetMaxOpenConns(maxOpen)
+	sqlDB.SetMaxIdleConns(maxIdle)
+	sqlDB.SetConnMaxLifetime(time.Duration(lifetimeMinutes) * time.Minute)
 }
 
 // buildDialector 根据驱动类型创建 GORM 方言。

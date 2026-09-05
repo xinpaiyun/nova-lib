@@ -196,11 +196,11 @@ func (s *LocalStore) Delete(_ context.Context, objectKey string) error {
 
 // PublicURL 返回本地文件访问地址。
 func (s *LocalStore) PublicURL(objectKey string) string {
-	filename := filepath.Base(normalizeObjectKey(objectKey))
+	key := normalizeObjectKey(objectKey)
 	if s.baseURL == "" {
-		return "/uploads/" + filename
+		return "/uploads/" + key
 	}
-	return s.baseURL + "/" + filename
+	return s.baseURL + "/" + key
 }
 
 // Enabled 返回本地文件存储是否可用。

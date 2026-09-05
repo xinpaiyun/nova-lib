@@ -32,11 +32,13 @@ var (
 
 // UploadOptions 描述上传对象的业务归属。
 // ObjectKey 非空时显式指定对象键（用于兼容既有键布局契约），否则自动生成。
+// ContentType 非空时显式指定内容类型，否则按文件扩展名推断。
 type UploadOptions struct {
-	TenantID  uint64
-	FileType  string
-	RefID     uint64
-	ObjectKey string
+	TenantID    uint64
+	FileType    string
+	RefID       uint64
+	ObjectKey   string
+	ContentType string
 }
 
 // UploadResult 描述上传后的访问地址和对象键。
@@ -337,7 +339,9 @@ func (s *S3Store) Upload(ctx context.Context, file io.Reader, filename string, c
 	if contentLength > 0 {
 		input.ContentLength = &contentLength
 	}
-	if contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(filename))); contentType != "" {
+	if opts.ContentType != "" {
+		input.ContentType = &opts.ContentType
+	} else if contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(filename))); contentType != "" {
 		input.ContentType = &contentType
 	}
 	if _, err := s.client.PutObject(ctx, input); err != nil {

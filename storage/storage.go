@@ -472,6 +472,11 @@ func normalizeObjectKey(value string) string {
 	return value
 }
 
+// NormalizeObjectKey 规范化对象键：剥离代理前缀、禁止目录穿越。
+func NormalizeObjectKey(value string) string {
+	return normalizeObjectKey(value)
+}
+
 // copyFileToPath 将本地文件复制到目标路径（先写临时文件再原子改名）。
 func copyFileToPath(sourcePath, targetPath string) error {
 	source, err := os.Open(sourcePath)

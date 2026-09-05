@@ -75,6 +75,14 @@ func DB() *gorm.DB {
 	return db
 }
 
+// AutoMigrate 使用全局连接执行模型自动迁移；未初始化时返回 ErrStorageDisabled。
+func AutoMigrate(models ...any) error {
+	if db == nil {
+		return ErrStorageDisabled
+	}
+	return db.AutoMigrate(models...)
+}
+
 // Close 关闭数据库连接。
 func Close() error {
 	if db == nil {

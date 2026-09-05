@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -9,9 +10,10 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	// 隔离内存回退缓存，避免污染其他包测试。
-	cache.DisableMemoryFallback()
-	m.Run()
+	// 会话测试依赖 cache 内存回退作为后端；结束后 Flush 防止污染其他包测试。
+	code := m.Run()
+	cache.Flush()
+	os.Exit(code)
 }
 
 func TestSessionRoundTrip(t *testing.T) {

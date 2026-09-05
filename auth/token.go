@@ -15,6 +15,8 @@ type Claims struct {
 	UserID       uint64 `json:"userId"`
 	TenantID     uint64 `json:"tenantId"`
 	RoleCode     string `json:"roleCode"`
+	AppType      string `json:"appType"`
+	OpenID       string `json:"openId"`
 	SessionID    string `json:"sessionId"`
 	TokenVersion int    `json:"tokenVersion"`
 	jwt.RegisteredClaims
@@ -22,11 +24,18 @@ type Claims struct {
 
 // IssueToken 签发包含用户、租户和角色信息的 JWT。
 func IssueToken(cfg config.JWTConfig, userID uint64, tenantID uint64, roleCode string, sessionID string, tokenVersion int) (string, time.Time, error) {
+	return IssueTokenWithIdentity(cfg, userID, tenantID, roleCode, "", "", sessionID, tokenVersion)
+}
+
+// IssueTokenWithIdentity 在 IssueToken 基础上额外携带 AppType 与 OpenID 身份字段。
+func IssueTokenWithIdentity(cfg config.JWTConfig, userID uint64, tenantID uint64, roleCode string, appType string, openID string, sessionID string, tokenVersion int) (string, time.Time, error) {
 	expiresAt := time.Now().Add(cfg.TokenTTL())
 	claims := Claims{
 		UserID:       userID,
 		TenantID:     tenantID,
 		RoleCode:     roleCode,
+		AppType:      appType,
+		OpenID:       openID,
 		SessionID:    sessionID,
 		TokenVersion: tokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{

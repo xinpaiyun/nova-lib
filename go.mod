@@ -20,6 +20,7 @@ require (
 	github.com/sirupsen/logrus v1.10.2
 	github.com/tidwall/gjson v1.14.4
 	github.com/wechatpay-apiv3/wechatpay-go v0.2.21
+	golang.org/x/crypto v0.32.0
 	gorm.io/driver/mysql v1.6.0
 	gorm.io/gorm v1.31.1
 )

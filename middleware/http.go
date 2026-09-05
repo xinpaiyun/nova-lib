@@ -26,6 +26,8 @@ const (
 	userIDKey    = "user_id"
 	tenantIDKey  = "tenant_id"
 	roleCodeKey  = "role_code"
+	appTypeKey   = "app_type"
+	openIDKey    = "open_id"
 	maxRequestID = 64
 )
 
@@ -176,9 +178,7 @@ func RequireAuth(cfg config.JWTConfig, validator SessionValidator) app.HandlerFu
 				return
 			}
 		}
-		c.Set(userIDKey, claims.UserID)
-		c.Set(tenantIDKey, claims.TenantID)
-		c.Set(roleCodeKey, claims.RoleCode)
+		writeIdentity(c, claims)
 		c.Next(ctx)
 	}
 }
@@ -200,11 +200,18 @@ func RequireSessionAuth() app.HandlerFunc {
 			c.Abort()
 			return
 		}
-		c.Set(userIDKey, claims.UserID)
-		c.Set(tenantIDKey, claims.TenantID)
-		c.Set(roleCodeKey, claims.RoleCode)
+		writeIdentity(c, claims)
 		c.Next(ctx)
 	}
+}
+
+// writeIdentity 把解析出的统一身份声明写入请求上下文。
+func writeIdentity(c *app.RequestContext, claims *auth.Claims) {
+	c.Set(userIDKey, claims.UserID)
+	c.Set(tenantIDKey, claims.TenantID)
+	c.Set(roleCodeKey, claims.RoleCode)
+	c.Set(appTypeKey, claims.AppType)
+	c.Set(openIDKey, claims.OpenID)
 }
 
 // RequestIDFromContext 从请求上下文读取追踪 ID。
@@ -235,6 +242,26 @@ func RoleCodeFromContext(c *app.RequestContext) string {
 	}
 	roleCode, _ := value.(string)
 	return roleCode
+}
+
+// AppTypeFromContext 从请求上下文读取当前会话的应用类型维度。
+func AppTypeFromContext(c *app.RequestContext) string {
+	value, ok := c.Get(appTypeKey)
+	if !ok {
+		return ""
+	}
+	appType, _ := value.(string)
+	return appType
+}
+
+// OpenIDFromContext 从请求上下文读取当前会话关联的 openid。
+func OpenIDFromContext(c *app.RequestContext) string {
+	value, ok := c.Get(openIDKey)
+	if !ok {
+		return ""
+	}
+	openID, _ := value.(string)
+	return openID
 }
 
 // normalizeRequestID 规范化外部传入的请求追踪 ID，避免日志污染和异常长响应头。

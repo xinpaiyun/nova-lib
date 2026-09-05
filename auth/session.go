@@ -24,6 +24,8 @@ type Session struct {
 	UserID    uint64    `json:"userId"`
 	TenantID  uint64    `json:"tenantId"`
 	RoleCode  string    `json:"roleCode"`
+	AppType   string    `json:"appType"`
+	OpenID    string    `json:"openId"`
 	CreatedAt time.Time `json:"createdAt"`
 	ExpiresAt time.Time `json:"expiresAt"`
 }
@@ -108,9 +110,11 @@ func RevokeSession(ctx context.Context, token string) error {
 // ClaimsFromSession 将服务端会话转换为统一的身份声明。
 func ClaimsFromSession(session Session) *Claims {
 	return &Claims{
-		UserID:    session.UserID,
-		TenantID:  session.TenantID,
-		RoleCode:  session.RoleCode,
+		UserID:   session.UserID,
+		TenantID: session.TenantID,
+		RoleCode: session.RoleCode,
+		AppType:  session.AppType,
+		OpenID:   session.OpenID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			IssuedAt:  jwt.NewNumericDate(session.CreatedAt),
 			ExpiresAt: jwt.NewNumericDate(session.ExpiresAt),

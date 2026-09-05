@@ -73,11 +73,11 @@ func TestMaskFunctions(t *testing.T) {
 		{"MaskName 2字", MaskName("张三"), "张*"},
 		{"MaskName 3字", MaskName("张三丰"), "张*丰"},
 		{"MaskName 空", MaskName("  "), ""},
-		{"MaskPhone", MaskPhone("13800138000"), "138****0000"},
-		{"MaskIDCard", MaskIDCard("110101199001011234"), "1101****1234"},
-		{"MaskCode", MaskCode("91110108MA01ABCX5T"), "911****X5T"},
+		{"MaskPhone", MaskPhone("13800138000"), "138****8000"},
+		{"MaskIDCard", MaskIDCard("110101199001011234"), "1101**********1234"},
+		{"MaskCode", MaskCode("91110108MA01ABCX5T"), "911************X5T"},
 		{"MaskCompanyName", MaskCompanyName("字节跳动有限公司"), "字节****"},
-		{"MaskAddress", MaskAddress("北京市海淀区中关村大街1号"), "北京市海淀区中***"},
+		{"MaskAddress", MaskAddress("北京市海淀区中关村大街1号"), "北京市海淀区****"},
 	}
 	for _, tc := range cases {
 		if tc.got != tc.want {

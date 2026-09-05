@@ -183,6 +183,30 @@ func RequireAuth(cfg config.JWTConfig, validator SessionValidator) app.HandlerFu
 	}
 }
 
+// RequireSessionAuth 基于 Redis 服务端会话校验 Bearer Token 并写入用户上下文。
+// 与 RequireAuth 的区别：信任源为 Redis 会话而非 JWT 签名，登录时校验账号状态、
+// 会话期内不再查询数据库，封禁可通过删除会话键即时生效。
+func RequireSessionAuth() app.HandlerFunc {
+	return func(ctx context.Context, c *app.RequestContext) {
+		tokenValue := strings.TrimPrefix(string(c.GetHeader("Authorization")), "Bearer ")
+		if tokenValue == "" {
+			response.Error(c, 401, "请先登录")
+			c.Abort()
+			return
+		}
+		claims, err := auth.ResolveClaims(ctx, tokenValue)
+		if err != nil {
+			response.Error(c, 401, "登录状态已失效")
+			c.Abort()
+			return
+		}
+		c.Set(userIDKey, claims.UserID)
+		c.Set(tenantIDKey, claims.TenantID)
+		c.Set(roleCodeKey, claims.RoleCode)
+		c.Next(ctx)
+	}
+}
+
 // RequestIDFromContext 从请求上下文读取追踪 ID。
 func RequestIDFromContext(c *app.RequestContext) string {
 	value, ok := c.Get(requestIDKey)

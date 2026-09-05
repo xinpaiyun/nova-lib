@@ -53,6 +53,15 @@ func CachePolicyFromConfig(cfg config.StorageConfig) CachePolicy {
 	}
 }
 
+// CachedObject 使用默认存储与配置的 CacheDir 缓存对象，返回本地路径和内容类型。
+// 私有桶且 CacheDir 未配置时返回错误。
+func CachedObject(objectKey string) (string, string, error) {
+	if defaultStore == nil || !defaultStore.Enabled() {
+		return "", "", fmt.Errorf("文件存储未初始化")
+	}
+	return CachedFile(defaultStore, defaultCfg.CacheDir, objectKey)
+}
+
 // CachedFile 将对象存储文件下载到本地缓存目录，返回可直接读取的本地路径和内容类型。
 // 命中缓存时刷新文件修改时间以近似记录最近访问时间。
 func CachedFile(store Store, cacheDir string, objectKey string) (string, string, error) {

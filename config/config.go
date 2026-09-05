@@ -87,6 +87,8 @@ type TenancyConfig struct {
 }
 
 // StorageConfig 定义本地文件存储或 S3 兼容对象存储配置。
+// PrivateBucket 为 true 时读取走预签名 URL 并自动启用本地缓存（CacheDir 非空时），
+// 为 false 时读取走公有直连地址。
 type StorageConfig struct {
 	Driver           string `yaml:"driver"`
 	LocalDir         string `yaml:"local_dir"`
@@ -101,6 +103,8 @@ type StorageConfig struct {
 	UseSSL           bool   `yaml:"use_ssl"`
 	ForcePathStyle   bool   `yaml:"force_path_style"`
 	PublicBaseURL    string `yaml:"public_base_url"`
+	PrivateBucket    bool   `yaml:"private_bucket"`
+	CacheDir         string `yaml:"cache_dir"`
 	CacheTTLHours    int    `yaml:"cache_ttl_hours"`
 	CacheMaxSizeMB   int64  `yaml:"cache_max_size_mb"`
 }

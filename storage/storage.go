@@ -19,7 +19,10 @@ import (
 	"github.com/xinpaiyun/nova-lib/config"
 )
 
-var defaultStore Store
+var (
+	defaultStore Store
+	defaultCfg   config.StorageConfig
+)
 
 // 编译期保证两种存储实现满足 Store 接口。
 var (
@@ -49,6 +52,7 @@ type Store interface {
 	Delete(ctx context.Context, objectKey string) error
 	PublicURL(objectKey string) string
 	PresignGetURL(ctx context.Context, objectKey string, ttl time.Duration) (string, error)
+	ReadURL(ctx context.Context, objectKey string, ttl time.Duration) (string, error)
 	MoveFile(ctx context.Context, sourceKey, targetKey string) (string, error)
 	Download(ctx context.Context, objectKey string, targetPath string) error
 	Probe(ctx context.Context) error
@@ -56,12 +60,22 @@ type Store interface {
 }
 
 // Init 初始化默认文件存储适配器。
+// 私有桶且配置了 CacheDir 时自动启用本地缓存清理器。
 func Init(cfg config.StorageConfig) error {
 	store, err := NewStore(cfg)
 	if err != nil {
 		return err
 	}
 	defaultStore = store
+	defaultCfg = cfg
+	if cfg.PrivateBucket && strings.TrimSpace(cfg.CacheDir) != "" {
+		if err := os.MkdirAll(cfg.CacheDir, 0o755); err != nil {
+			return fmt.Errorf("failed to create object cache directory: %v", err)
+		}
+		StartCacheCleaner(cfg.CacheDir, CachePolicyFromConfig(cfg))
+	} else {
+		StopCacheCleaner()
+	}
 	return nil
 }
 
@@ -92,6 +106,25 @@ func PublicURL(objectKey string) string {
 		return ""
 	}
 	return defaultStore.PublicURL(objectKey)
+}
+
+// ReadURL 按默认存储的桶模式返回最优读取地址：
+// 公有桶返回公有直连地址，私有桶返回短时预签名 URL。
+func ReadURL(ctx context.Context, objectKey string, ttl time.Duration) (string, error) {
+	if defaultStore == nil || !defaultStore.Enabled() {
+		return "", fmt.Errorf("文件存储未初始化")
+	}
+	return defaultStore.ReadURL(ctx, objectKey, ttl)
+}
+
+// Config 返回默认存储配置副本，供业务层判断桶模式与缓存目录。
+func Config() config.StorageConfig {
+	return defaultCfg
+}
+
+// IsPrivateBucket 返回默认存储是否为私有桶模式。
+func IsPrivateBucket() bool {
+	return defaultCfg.PrivateBucket
 }
 
 // LocalFilePath 返回本地存储文件路径，用于开发环境文件代理。
@@ -195,6 +228,14 @@ func (s *LocalStore) Download(_ context.Context, objectKey string, targetPath st
 
 // PresignGetURL 返回本地存储文件的访问地址（本地模式无需签名）。
 func (s *LocalStore) PresignGetURL(_ context.Context, objectKey string, _ time.Duration) (string, error) {
+	if !s.Enabled() {
+		return "", fmt.Errorf("本地文件存储未初始化")
+	}
+	return s.PublicURL(objectKey), nil
+}
+
+// ReadURL 返回本地文件访问地址（本地模式无公私桶差异）。
+func (s *LocalStore) ReadURL(_ context.Context, objectKey string, _ time.Duration) (string, error) {
 	if !s.Enabled() {
 		return "", fmt.Errorf("本地文件存储未初始化")
 	}
@@ -386,6 +427,18 @@ func (s *S3Store) Download(ctx context.Context, objectKey string, targetPath str
 		return fmt.Errorf("failed to move object cache file: %v", err)
 	}
 	return nil
+}
+
+// ReadURL 按桶模式返回最优读取地址：
+// 公有桶返回公有直连地址；私有桶返回短时预签名 URL（外部服务端读取私有对象）。
+func (s *S3Store) ReadURL(ctx context.Context, objectKey string, ttl time.Duration) (string, error) {
+	if !s.cfg.PrivateBucket {
+		if !s.Enabled() {
+			return "", fmt.Errorf("对象存储未初始化")
+		}
+		return s.PublicURL(objectKey), nil
+	}
+	return s.PresignGetURL(ctx, objectKey, ttl)
 }
 
 // PresignGetURL 生成对象临时访问地址。

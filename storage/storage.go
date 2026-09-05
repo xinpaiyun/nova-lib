@@ -28,10 +28,12 @@ var (
 )
 
 // UploadOptions 描述上传对象的业务归属。
+// ObjectKey 非空时显式指定对象键（用于兼容既有键布局契约），否则自动生成。
 type UploadOptions struct {
-	TenantID uint64
-	FileType string
-	RefID    uint64
+	TenantID  uint64
+	FileType  string
+	RefID     uint64
+	ObjectKey string
 }
 
 // UploadResult 描述上传后的访问地址和对象键。
@@ -48,6 +50,8 @@ type Store interface {
 	PublicURL(objectKey string) string
 	PresignGetURL(ctx context.Context, objectKey string, ttl time.Duration) (string, error)
 	MoveFile(ctx context.Context, sourceKey, targetKey string) (string, error)
+	Download(ctx context.Context, objectKey string, targetPath string) error
+	Probe(ctx context.Context) error
 	Enabled() bool
 }
 
@@ -169,6 +173,26 @@ func (s *LocalStore) Enabled() bool {
 	return s != nil && s.dir != ""
 }
 
+// Probe 检查本地存储可用性（目录已存在即可写）。
+func (s *LocalStore) Probe(_ context.Context) error {
+	if !s.Enabled() {
+		return fmt.Errorf("本地文件存储未初始化")
+	}
+	return nil
+}
+
+// Download 复制本地存储文件到目标路径。
+func (s *LocalStore) Download(_ context.Context, objectKey string, targetPath string) error {
+	sourcePath, ok := s.localPath(objectKey)
+	if !ok {
+		return fmt.Errorf("object key 不合法")
+	}
+	if _, err := os.Stat(sourcePath); err != nil {
+		return fmt.Errorf("failed to read file from local storage: %v", err)
+	}
+	return copyFileToPath(sourcePath, targetPath)
+}
+
 // PresignGetURL 返回本地存储文件的访问地址（本地模式无需签名）。
 func (s *LocalStore) PresignGetURL(_ context.Context, objectKey string, _ time.Duration) (string, error) {
 	if !s.Enabled() {
@@ -228,13 +252,37 @@ func NewS3Store(cfg config.StorageConfig) (*S3Store, error) {
 	}
 	client := s3.NewFromConfig(awsCfg, func(options *s3.Options) {
 		options.UsePathStyle = cfg.ForcePathStyle
-		if endpoint := strings.TrimSpace(cfg.Endpoint); endpoint != "" {
+		if endpoint := strings.TrimSpace(s3Endpoint(cfg)); endpoint != "" {
 			options.BaseEndpoint = &endpoint
 		}
 		// 阿里云 OSS S3 兼容层不支持 SDK 默认的 aws-chunked 校验和上传。
 		options.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 	})
 	return &S3Store{cfg: cfg, client: client}, nil
+}
+
+// s3Endpoint 返回 SDK 使用的 S3 兼容 endpoint，内网直连地址优先。
+func s3Endpoint(cfg config.StorageConfig) string {
+	if endpoint := strings.TrimSpace(cfg.InternalEndpoint); endpoint != "" {
+		return normalizeS3Endpoint(endpoint, cfg.UseSSL)
+	}
+	return normalizeS3Endpoint(cfg.Endpoint, cfg.UseSSL)
+}
+
+// normalizeS3Endpoint 将 endpoint 规范化为带协议、无尾斜杠的 URL。
+func normalizeS3Endpoint(endpoint string, useSSL bool) string {
+	trimmed := strings.TrimSpace(endpoint)
+	if trimmed == "" {
+		return ""
+	}
+	if !strings.Contains(trimmed, "://") {
+		scheme := "http"
+		if useSSL {
+			scheme = "https"
+		}
+		trimmed = fmt.Sprintf("%s://%s", scheme, trimmed)
+	}
+	return strings.TrimRight(trimmed, "/")
 }
 
 // Upload 上传文件到 S3 兼容对象存储。
@@ -295,6 +343,51 @@ func (s *S3Store) Enabled() bool {
 	return s != nil && s.client != nil
 }
 
+// Probe 使用 HeadBucket 校验桶配置与凭据是否可用。
+func (s *S3Store) Probe(ctx context.Context) error {
+	if !s.Enabled() {
+		return fmt.Errorf("对象存储未初始化")
+	}
+	_, err := s.client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: &s.cfg.BucketName})
+	return err
+}
+
+// Download 下载对象到本地目标路径（先写临时文件再原子改名）。
+func (s *S3Store) Download(ctx context.Context, objectKey string, targetPath string) error {
+	key := normalizeObjectKey(objectKey)
+	if key == "" {
+		return fmt.Errorf("object key 不能为空")
+	}
+	if !s.Enabled() {
+		return fmt.Errorf("对象存储未初始化")
+	}
+	resp, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: &s.cfg.BucketName, Key: &key})
+	if err != nil {
+		return fmt.Errorf("failed to read file from object storage: %v", err)
+	}
+	defer resp.Body.Close()
+
+	tmpPath := fmt.Sprintf("%s.tmp.%d", targetPath, time.Now().UnixNano())
+	dst, err := os.Create(tmpPath)
+	if err != nil {
+		return fmt.Errorf("failed to create object cache file: %v", err)
+	}
+	if _, err := io.Copy(dst, resp.Body); err != nil {
+		_ = dst.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to write object cache file: %v", err)
+	}
+	if err := dst.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to close object cache file: %v", err)
+	}
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to move object cache file: %v", err)
+	}
+	return nil
+}
+
 // PresignGetURL 生成对象临时访问地址。
 func (s *S3Store) PresignGetURL(ctx context.Context, objectKey string, ttl time.Duration) (string, error) {
 	key := normalizeObjectKey(objectKey)
@@ -344,8 +437,11 @@ func (s *S3Store) MoveFile(ctx context.Context, sourceKey, targetKey string) (st
 	return s.PublicURL(target), nil
 }
 
-// buildObjectKey 生成稳定的对象键路径。
+// buildObjectKey 生成稳定的对象键路径；显式指定 ObjectKey 时直接使用。
 func buildObjectKey(filename string, opts UploadOptions) string {
+	if explicit := normalizeObjectKey(opts.ObjectKey); explicit != "" {
+		return explicit
+	}
 	ext := strings.ToLower(filepath.Ext(filename))
 	name := fmt.Sprintf("%d%s", time.Now().UnixNano(), ext)
 	fileType := normalizePathSegment(opts.FileType, "general")
@@ -359,7 +455,7 @@ func buildObjectKey(filename string, opts UploadOptions) string {
 	return fmt.Sprintf("%s/%s/%s", fileType, refSegment, name)
 }
 
-// normalizeObjectKey 规范化对象键，禁止目录穿越。
+// normalizeObjectKey 规范化对象键，禁止目录穿越，并剥离后端文件代理前缀。
 func normalizeObjectKey(value string) string {
 	value = strings.TrimSpace(value)
 	if parsed, err := url.Parse(value); err == nil && parsed.Path != "" {
@@ -367,11 +463,42 @@ func normalizeObjectKey(value string) string {
 	}
 	value = strings.TrimLeft(value, "/")
 	value = strings.TrimPrefix(value, "uploads/")
+	value = strings.TrimPrefix(value, "v1/files/")
+	value = strings.TrimPrefix(value, "files/")
 	value = filepath.ToSlash(filepath.Clean(value))
 	if value == "." || strings.HasPrefix(value, "../") || value == ".." {
 		return ""
 	}
 	return value
+}
+
+// copyFileToPath 将本地文件复制到目标路径（先写临时文件再原子改名）。
+func copyFileToPath(sourcePath, targetPath string) error {
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		return fmt.Errorf("failed to read file from local storage: %v", err)
+	}
+	defer source.Close()
+
+	tmpPath := fmt.Sprintf("%s.tmp.%d", targetPath, time.Now().UnixNano())
+	dst, err := os.Create(tmpPath)
+	if err != nil {
+		return fmt.Errorf("failed to create local cache file: %v", err)
+	}
+	if _, err := io.Copy(dst, source); err != nil {
+		_ = dst.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to write local cache file: %v", err)
+	}
+	if err := dst.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to close local cache file: %v", err)
+	}
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to move local cache file: %v", err)
+	}
+	return nil
 }
 
 // normalizePathSegment 规范化对象键路径片段。

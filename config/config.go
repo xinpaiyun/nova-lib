@@ -88,18 +88,21 @@ type TenancyConfig struct {
 
 // StorageConfig 定义本地文件存储或 S3 兼容对象存储配置。
 type StorageConfig struct {
-	Driver          string `yaml:"driver"`
-	LocalDir        string `yaml:"local_dir"`
-	LocalBaseURL    string `yaml:"local_base_url"`
-	MaxUploadBytes  int64  `yaml:"max_upload_bytes"`
-	Endpoint        string `yaml:"endpoint"`
-	AccessKeyID     string `yaml:"access_key_id"`
-	AccessKeySecret string `yaml:"access_key_secret"`
-	BucketName      string `yaml:"bucket_name"`
-	Region          string `yaml:"region"`
-	UseSSL          bool   `yaml:"use_ssl"`
-	ForcePathStyle  bool   `yaml:"force_path_style"`
-	PublicBaseURL   string `yaml:"public_base_url"`
+	Driver           string `yaml:"driver"`
+	LocalDir         string `yaml:"local_dir"`
+	LocalBaseURL     string `yaml:"local_base_url"`
+	MaxUploadBytes   int64  `yaml:"max_upload_bytes"`
+	Endpoint         string `yaml:"endpoint"`
+	InternalEndpoint string `yaml:"internal_endpoint"`
+	AccessKeyID      string `yaml:"access_key_id"`
+	AccessKeySecret  string `yaml:"access_key_secret"`
+	BucketName       string `yaml:"bucket_name"`
+	Region           string `yaml:"region"`
+	UseSSL           bool   `yaml:"use_ssl"`
+	ForcePathStyle   bool   `yaml:"force_path_style"`
+	PublicBaseURL    string `yaml:"public_base_url"`
+	CacheTTLHours    int    `yaml:"cache_ttl_hours"`
+	CacheMaxSizeMB   int64  `yaml:"cache_max_size_mb"`
 }
 
 // SMSConfig 定义短信验证码服务配置。

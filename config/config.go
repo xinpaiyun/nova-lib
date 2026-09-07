@@ -79,6 +79,18 @@ type SecurityHeadersConfig struct {
 	Enabled bool `yaml:"enabled"`
 }
 
+// AccessLogConfig 定义访问日志与慢请求告警配置。
+type AccessLogConfig struct {
+	// SlowThresholdMS 为慢请求告警阈值（毫秒），0 表示使用默认值。
+	SlowThresholdMS int `yaml:"slow_threshold_ms"`
+}
+
+// BodyLimitConfig 定义请求体大小限制配置。
+type BodyLimitConfig struct {
+	Enabled  bool  `yaml:"enabled"`
+	MaxBytes int64 `yaml:"max_bytes"`
+}
+
 // TenancyConfig 定义 SaaS、多租户和用户租户隔离业务形态。
 type TenancyConfig struct {
 	SaaSEnabled                bool `yaml:"saas_enabled"`

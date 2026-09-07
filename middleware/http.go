@@ -126,21 +126,60 @@ func Recovery() app.HandlerFunc {
 	}
 }
 
-// AccessLog 记录请求访问日志（JSON 结构化输出）和进程内指标。
+// defaultSlowThreshold 为慢请求告警的默认阈值。
+const defaultSlowThreshold = time.Second
+
+// AccessLogOptions 定义访问日志中间件的可配置项。
+type AccessLogOptions struct {
+	// Recorder 为业务侧访问日志回调（如落库），可为 nil。
+	Recorder AccessLogRecorder
+	// SlowThreshold 为慢请求告警阈值，小于等于 0 时使用默认值 1s。
+	SlowThreshold time.Duration
+	// SkipPaths 为跳过访问日志与慢请求告警的路径（精确匹配，如健康检查）。
+	SkipPaths []string
+}
+
+// AccessLog 记录请求访问日志（JSON 结构化输出）和进程内指标，慢请求按阈值告警。
 func AccessLog() app.HandlerFunc {
 	return AccessLogWithRecorder(nil)
 }
 
 // AccessLogWithRecorder 在 AccessLog 基础上追加业务侧日志记录回调（如落库）。
 func AccessLogWithRecorder(recorder AccessLogRecorder) app.HandlerFunc {
+	return AccessLogWithConfig(AccessLogOptions{Recorder: recorder})
+}
+
+// AccessLogWithConfig 按配置构建访问日志中间件：
+// 每次请求输出结构化访问日志并记录指标，耗时达到 SlowThreshold 的请求额外输出慢请求告警。
+func AccessLogWithConfig(opts AccessLogOptions) app.HandlerFunc {
+	threshold := opts.SlowThreshold
+	if threshold <= 0 {
+		threshold = defaultSlowThreshold
+	}
+	skipPaths := make(map[string]struct{}, len(opts.SkipPaths))
+	for _, path := range opts.SkipPaths {
+		skipPaths[path] = struct{}{}
+	}
 	return func(ctx context.Context, c *app.RequestContext) {
 		start := time.Now()
 		c.Next(ctx)
+		if _, skip := skipPaths[string(c.Path())]; skip {
+			return
+		}
 		status := c.Response.StatusCode()
 		latency := time.Since(start)
 		method := string(c.Method())
 		path := string(c.Path())
 		metrics.RecordRequest(method, path, status, latency)
+		if latency >= threshold {
+			logging.WarnRequest(c, "slow request",
+				"method", method,
+				"path", path,
+				"status", status,
+				"latency_ms", latency.Milliseconds(),
+				"threshold_ms", threshold.Milliseconds(),
+			)
+		}
 		logging.Info("request access log",
 			"request_id", RequestIDFromContext(c),
 			"method", method,
@@ -149,8 +188,8 @@ func AccessLogWithRecorder(recorder AccessLogRecorder) app.HandlerFunc {
 			"latency_ms", latency.Milliseconds(),
 			"client_ip", c.ClientIP(),
 		)
-		if recorder != nil {
-			recorder(c, method, path, status, latency)
+		if opts.Recorder != nil {
+			opts.Recorder(c, method, path, status, latency)
 		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 
@@ -170,5 +171,90 @@ func TestNormalizeHostDomain(t *testing.T) {
 		if got := normalizeHostDomain(host); got != "" {
 			t.Fatalf("normalizeHostDomain(%q) = %q, want empty", host, got)
 		}
+	}
+}
+
+// TestAccessLogWithConfigRecordsAndWarns 验证访问日志回调与慢请求告警路径。
+func TestAccessLogWithConfigRecordsAndWarns(t *testing.T) {
+	called := false
+	recorder := func(c *app.RequestContext, method string, path string, status int, latency time.Duration) {
+		called = true
+		if method != "POST" || path != "/v1/slow" || status != 200 {
+			t.Fatalf("recorder args = (%s, %s, %d), want (POST, /v1/slow, 200)", method, path, status)
+		}
+	}
+	c := app.NewContext(0)
+	c.Request.SetMethod("POST")
+	c.Request.URI().SetPath("/v1/slow")
+	c.Set(requestIDKey, "req-slow")
+	c.SetHandlers(app.HandlersChain{
+		AccessLogWithConfig(AccessLogOptions{Recorder: recorder, SlowThreshold: time.Nanosecond}),
+		func(_ context.Context, _ *app.RequestContext) {
+			time.Sleep(2 * time.Millisecond)
+		},
+	})
+	c.Next(context.Background())
+
+	if !called {
+		t.Fatalf("recorder should be invoked")
+	}
+	if c.Response.StatusCode() != 200 {
+		t.Fatalf("status = %d, want 200", c.Response.StatusCode())
+	}
+}
+
+// TestAccessLogWithRecorderDelegatesToConfig 验证旧入口与新配置入口行为一致。
+func TestAccessLogWithRecorderDelegatesToConfig(t *testing.T) {
+	called := false
+	c := app.NewContext(0)
+	c.SetHandlers(app.HandlersChain{
+		AccessLogWithRecorder(func(_ *app.RequestContext, _ string, _ string, _ int, _ time.Duration) {
+			called = true
+		}),
+	})
+	c.Next(context.Background())
+	if !called {
+		t.Fatalf("recorder should be invoked")
+	}
+}
+
+// TestAccessLogSkipPaths 验证跳过路径不触发访问日志回调与告警。
+func TestAccessLogSkipPaths(t *testing.T) {
+	called := false
+	c := app.NewContext(0)
+	c.Request.URI().SetPath("/v1/health")
+	c.SetHandlers(app.HandlersChain{
+		AccessLogWithConfig(AccessLogOptions{
+			Recorder: func(_ *app.RequestContext, _ string, _ string, _ int, _ time.Duration) {
+				called = true
+			},
+			SlowThreshold: time.Nanosecond,
+			SkipPaths:     []string{"/v1/health"},
+		}),
+		func(_ context.Context, _ *app.RequestContext) {
+			time.Sleep(2 * time.Millisecond)
+		},
+	})
+	c.Next(context.Background())
+
+	if called {
+		t.Fatalf("recorder should be skipped for path in SkipPaths")
+	}
+
+	// 不在跳过列表的路径仍正常记录。
+	other := false
+	normal := app.NewContext(0)
+	normal.Request.URI().SetPath("/v1/users")
+	normal.SetHandlers(app.HandlersChain{
+		AccessLogWithConfig(AccessLogOptions{
+			Recorder: func(_ *app.RequestContext, _ string, _ string, _ int, _ time.Duration) {
+				other = true
+			},
+			SkipPaths: []string{"/v1/health"},
+		}),
+	})
+	normal.Next(context.Background())
+	if !other {
+		t.Fatalf("recorder should be invoked for path not in SkipPaths")
 	}
 }

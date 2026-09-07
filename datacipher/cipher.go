@@ -1,4 +1,6 @@
-// Package datacipher 提供敏感业务数据的 AES-GCM 加密存储、HMAC-SHA256 检索哈希和字段脱敏能力。
+// Package datacipher 提供敏感字段级安全能力的统一实现：
+// AES-GCM 字段加解密、HMAC-SHA256 检索哈希与展示脱敏。
+// （原 fieldsec 包已并入本包，密文格式 enc:v1: 保持不变，可互读历史密文。）
 package datacipher
 
 import (
@@ -27,6 +29,7 @@ type dataSecurityManager struct {
 
 // Configure 初始化数据加密与检索哈希能力。
 // encryptKey 与 hashKey 为空时从环境变量读取，仍为空时使用 fallbackSecret 派生。
+// 任一来源均为空时对应能力保持未启用态：加密为空操作、哈希退化为 SHA-256。
 func Configure(encryptKey, hashKey, fallbackSecret string) {
 	encSource := firstNonEmpty(os.Getenv("APP_DATA_ENCRYPT_KEY"), encryptKey, fallbackSecret)
 	hashSource := firstNonEmpty(os.Getenv("APP_DATA_HASH_KEY"), hashKey, fallbackSecret)
@@ -36,7 +39,7 @@ func Configure(encryptKey, hashKey, fallbackSecret string) {
 	}
 }
 
-// EncryptString 加密字符串，空值直接返回。
+// EncryptString 加密字符串，空值直接返回，已加密值不重复加密。
 func EncryptString(value string) (string, error) {
 	if strings.TrimSpace(value) == "" {
 		return "", nil
@@ -44,7 +47,7 @@ func EncryptString(value string) (string, error) {
 	if IsEncrypted(value) {
 		return value, nil
 	}
-	if manager == nil {
+	if manager == nil || manager.encryptKey == nil {
 		return value, nil
 	}
 	block, err := aes.NewCipher(manager.encryptKey)
@@ -68,7 +71,7 @@ func DecryptString(value string) (string, error) {
 	if strings.TrimSpace(value) == "" {
 		return "", nil
 	}
-	if !IsEncrypted(value) || manager == nil {
+	if !IsEncrypted(value) || manager == nil || manager.encryptKey == nil {
 		return value, nil
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(value, encryptedPrefix))
@@ -99,13 +102,14 @@ func IsEncrypted(value string) bool {
 	return strings.HasPrefix(strings.TrimSpace(value), encryptedPrefix)
 }
 
-// LookupHash 生成查询使用的稳定 HMAC-SHA256 哈希。
+// LookupHash 生成查询使用的稳定 HMAC-SHA256 哈希；用于密文字段的等值检索。
+// 未配置 hashKey 时退化为 SHA-256。
 func LookupHash(value string) string {
 	normalized := normalizeLookup(value)
 	if normalized == "" {
 		return ""
 	}
-	if manager == nil {
+	if manager == nil || manager.hashKey == nil {
 		sum := sha256.Sum256([]byte(normalized))
 		return hex.EncodeToString(sum[:])
 	}
@@ -129,6 +133,18 @@ func MaskName(value string) string {
 	}
 }
 
+// MaskCompanyName 脱敏企业名称，保留前两个字符便于识别。
+func MaskCompanyName(value string) string {
+	runes := []rune(strings.TrimSpace(value))
+	if len(runes) == 0 {
+		return ""
+	}
+	if len(runes) <= 2 {
+		return string(runes[:1]) + "***"
+	}
+	return string(runes[:2]) + "****"
+}
+
 // MaskPhone 脱敏手机号或联系电话。
 func MaskPhone(value string) string {
 	return maskMiddle(value, 3, 4)
@@ -137,6 +153,11 @@ func MaskPhone(value string) string {
 // MaskIDCard 脱敏身份证号。
 func MaskIDCard(value string) string {
 	return maskMiddle(value, 4, 4)
+}
+
+// MaskCode 脱敏统一代码、执照号等编号字段。
+func MaskCode(value string) string {
+	return maskMiddle(value, 3, 3)
 }
 
 // MaskAddress 脱敏地址，保留前缀便于识别。
@@ -161,7 +182,11 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// deriveKey 从来源派生密钥；来源为空时返回 nil，表示该能力未启用。
 func deriveKey(value, purpose string) []byte {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
 	sum := sha256.Sum256([]byte(purpose + ":" + value))
 	key := make([]byte, len(sum))
 	copy(key, sum[:])

@@ -1,95 +1,77 @@
-// Package validate 提供基于结构体 tag 的基础参数校验。
+// Package validate 提供基于结构体 tag 的参数校验，底层使用 go-playground/validator。
 package validate
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
-	"strconv"
 	"strings"
+
+	"github.com/go-playground/validator/v10"
 )
 
-// Struct 根据结构体字段的 validate tag 执行基础参数校验。
+// validate 基于结构体字段的 validate tag 执行参数校验。
+// RegisterTagNameFunc 让错误信息中的字段名优先使用 json tag 命名。
+var validate = newValidator()
+
+func newValidator() *validator.Validate {
+	v := validator.New()
+	v.RegisterTagNameFunc(func(sf reflect.StructField) string {
+		name := strings.SplitN(sf.Tag.Get("json"), ",", 2)[0]
+		if name == "" || name == "-" {
+			return sf.Name
+		}
+		return name
+	})
+	return v
+}
+
+// Struct 根据结构体字段的 validate tag 执行参数校验，
+// 命中第一条失败规则时返回可读错误信息（如 "phone is required"）。
 func Struct(v interface{}) error {
-	value := reflect.ValueOf(v)
-	if value.Kind() == reflect.Ptr {
-		value = value.Elem()
-	}
-	if !value.IsValid() || value.Kind() != reflect.Struct {
+	if v == nil {
 		return nil
 	}
-
-	typ := value.Type()
-	for i := 0; i < value.NumField(); i++ {
-		field := value.Field(i)
-		fieldType := typ.Field(i)
-		tag := fieldType.Tag.Get("validate")
-		if tag == "" || tag == "-" {
-			continue
-		}
-		name := fieldName(fieldType)
-		for _, rule := range strings.Split(tag, ",") {
-			if err := validateRule(field, name, rule); err != nil {
-				return err
-			}
-		}
+	err := validate.Struct(v)
+	if err == nil {
+		return nil
 	}
-	return nil
+	// 非结构体、nil 指针等非法入参保持与旧实现一致的宽松行为。
+	var invalid *validator.InvalidValidationError
+	if errors.As(err, &invalid) {
+		return nil
+	}
+	var errs validator.ValidationErrors
+	if errors.As(err, &errs) && len(errs) > 0 {
+		return message(errs[0])
+	}
+	return err
 }
 
-// validateRule 执行单条校验规则。
-func validateRule(field reflect.Value, name, rule string) error {
-	switch {
-	case rule == "required":
-		if isZero(field) {
-			return fmt.Errorf("%s is required", name)
-		}
-	case strings.HasPrefix(rule, "min="):
-		min, err := strconv.ParseFloat(strings.TrimPrefix(rule, "min="), 64)
-		if err != nil {
-			return nil
-		}
-		if !matchMin(field, min) {
-			return fmt.Errorf("%s must be at least %s", name, strings.TrimPrefix(rule, "min="))
-		}
-	}
-	return nil
-}
-
-// fieldName 返回用于错误提示的 JSON 字段名。
-func fieldName(fieldType reflect.StructField) string {
-	jsonTag := fieldType.Tag.Get("json")
-	if jsonTag == "" || jsonTag == "-" {
-		return fieldType.Name
-	}
-	return strings.Split(jsonTag, ",")[0]
-}
-
-// isZero 判断字段是否为空值。
-func isZero(field reflect.Value) bool {
-	if field.Kind() == reflect.Ptr {
-		return field.IsNil()
-	}
-	return field.IsZero()
-}
-
-// matchMin 判断字段是否满足 min 规则。
-func matchMin(field reflect.Value, min float64) bool {
-	if field.Kind() == reflect.Ptr {
-		if field.IsNil() {
-			return true
-		}
-		field = field.Elem()
-	}
-	switch field.Kind() {
-	case reflect.String, reflect.Array, reflect.Slice, reflect.Map:
-		return float64(field.Len()) >= min
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return float64(field.Int()) >= min
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		return float64(field.Uint()) >= min
-	case reflect.Float32, reflect.Float64:
-		return field.Float() >= min
+// message 将单条校验失败翻译为面向客户端的可读错误信息。
+func message(fe validator.FieldError) error {
+	field := fe.Field()
+	param := fe.Param()
+	switch fe.Tag() {
+	case "required":
+		return fmt.Errorf("%s is required", field)
+	case "min":
+		return fmt.Errorf("%s must be at least %s", field, param)
+	case "max":
+		return fmt.Errorf("%s must be at most %s", field, param)
+	case "gt":
+		return fmt.Errorf("%s must be greater than %s", field, param)
+	case "gte":
+		return fmt.Errorf("%s must be greater than or equal to %s", field, param)
+	case "lt":
+		return fmt.Errorf("%s must be less than %s", field, param)
+	case "lte":
+		return fmt.Errorf("%s must be less than or equal to %s", field, param)
+	case "oneof":
+		return fmt.Errorf("%s must be one of %s", field, param)
+	case "email":
+		return fmt.Errorf("%s must be a valid email", field)
 	default:
-		return true
+		return fmt.Errorf("%s failed %s validation", field, fe.Tag())
 	}
 }

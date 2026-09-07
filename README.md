@@ -20,11 +20,11 @@
 | `redis` | Redis 客户端管理 | ✅ 已迁入 |
 | `cache` | Redis 缓存，未启用时回退内存缓存 | ✅ 已迁入 |
 | `auth` | JWT 签发与解析 | ✅ 已迁入 |
-| `validate` | 结构体 tag 参数校验 | ✅ 已迁入 |
+| `validate` | 基于 go-playground/validator 的结构体 tag 参数校验（错误信息用 json 字段名，如 "phone is required"） | ✅ 已迁入 |
 | `password` | 密码基础校验 | ✅ 已迁入 |
 | `logging` | logrus JSON 结构化日志 + hlog 适配 + 请求追踪 ID + GORM 日志适配器 | ✅ v1.3.0 |
 | `metrics` | 进程内 HTTP 请求指标记录与快照 | ✅ v1.3.0 |
-| `middleware` | Hertz 通用中间件：RequestID/CORS/安全头/Recovery/访问日志/限流/租户解析/JWT 鉴权（会话校验与日志落库通过回调注入） | ✅ v1.3.0 |
+| `middleware` | Hertz 通用中间件：RequestID/CORS/安全头/Recovery/访问日志（SkipPaths + 慢请求告警）/限流/请求体大小限制（BodyLimit）/租户解析/JWT 鉴权（会话校验与日志落库通过回调注入） | ✅ v1.3.0 |
 
 ### 第三方能力
 
@@ -44,7 +44,7 @@
 
 | 包 | 说明 | 状态 |
 |---|---|---|
-| `datacipher` | AES-GCM 字段加密、HMAC 检索哈希、脱敏 | ✅ 已迁入 |
+| `datacipher` | 敏感字段安全统一实现：AES-GCM 字段加解密、HMAC 检索哈希、脱敏（姓名/手机号/企业名等；原 fieldsec 包已并入，密文格式兼容） | ✅ 已迁入 |
 | `queue` | Redis Streams 任务队列与 Worker | ✅ 已迁入 |
 | `events` | 内存 SSE 发布订阅 Hub | ✅ 已迁入 |
 | `event` | 事务性 Outbox 事件中心（重试/死信/幂等消费） | ✅ 已迁入 |

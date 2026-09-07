@@ -3,9 +3,13 @@
 package logging
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -281,3 +285,269 @@ func resolveHlogLevel(mode string) hlog.Level {
 	}
 	return hlog.LevelDebug
 }
+
+// ==================== 请求体/响应体摘要能力 ====================
+
+const (
+	// summaryMaxKeys 限制对象摘要的字段数量，避免日志过长。
+	summaryMaxKeys = 8
+	// summaryMaxItems 限制数组摘要的采样数量，避免日志过长。
+	summaryMaxItems = 3
+	// summaryMaxDepth 限制摘要递归层级，避免深层结构刷屏。
+	summaryMaxDepth = 2
+	// summaryMaxText 限制文本摘要长度，避免日志过长。
+	summaryMaxText = 256
+)
+
+// 默认敏感字段列表（其他项目可在此基础上扩展）
+var defaultSensitiveSummaryKeys = map[string]struct{}{
+	"access_key":        {},
+	"access_key_id":     {},
+	"access_key_secret": {},
+	"api_key":           {},
+	"apikeyv3":          {},
+	"app_secret":        {},
+	"appsecret":         {},
+	"authorization":     {},
+	"client_secret":     {},
+	"clientsecret":      {},
+	"code":              {},
+	"encrypt_key":       {},
+	"encryptkey":        {},
+	"open_id":           {},
+	"openid":            {},
+	"password":          {},
+	"phone":             {},
+	"private_key":       {},
+	"privatekey":        {},
+	"refresh_token":     {},
+	"secret":            {},
+	"session_key":       {},
+	"token":             {},
+}
+
+// summarizeQueryString 返回脱敏后的查询参数摘要。
+func SummarizeQueryString(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	values, err := url.ParseQuery(raw)
+	if err != nil {
+		return fmt.Sprintf("invalid_query len=%d", len(raw))
+	}
+	return MarshalSummary(SummarizeValues(values))
+}
+
+// summarizePayload 返回脱敏后的请求体或响应体摘要。
+func SummarizePayload(body []byte, contentType string) string {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return ""
+	}
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+	if strings.Contains(contentType, "application/x-www-form-urlencoded") {
+		values, err := url.ParseQuery(string(trimmed))
+		if err != nil {
+			return fmt.Sprintf("invalid_form body_bytes=%d", len(trimmed))
+		}
+		return MarshalSummary(SummarizeValues(values))
+	}
+	if strings.Contains(contentType, "application/json") || LooksLikeJSON(trimmed) {
+		var payload any
+		if err := json.Unmarshal(trimmed, &payload); err == nil {
+			return MarshalSummary(SummarizeJSONValue(payload, 0))
+		}
+	}
+	return fmt.Sprintf("content_type=%q body_bytes=%d", contentType, len(trimmed))
+}
+
+// SummarizeValues 返回查询参数或表单参数的脱敏摘要。
+func SummarizeValues(values url.Values) map[string]any {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if len(keys) > summaryMaxKeys {
+		keys = keys[:summaryMaxKeys]
+	}
+	summary := make(map[string]any, len(keys)+1)
+	for _, key := range keys {
+		items := values[key]
+		if len(items) == 1 {
+			summary[key] = MaskSummaryValue(key, items[0])
+			continue
+		}
+		masked := make([]string, 0, MinInt(len(items), summaryMaxItems))
+		for idx, item := range items {
+			if idx >= summaryMaxItems {
+				break
+			}
+			masked = append(masked, fmt.Sprint(MaskSummaryValue(key, item)))
+		}
+		summary[key] = map[string]any{
+			"count":  len(items),
+			"sample": masked,
+		}
+	}
+	if len(values) > len(keys) {
+		summary["_truncated_keys"] = len(values) - len(keys)
+	}
+	return summary
+}
+
+// SummarizeJSONValue 返回 JSON 结构的脱敏摘要。
+func SummarizeJSONValue(value any, depth int) any {
+	if depth >= summaryMaxDepth {
+		switch typed := value.(type) {
+		case map[string]any:
+			return fmt.Sprintf("object(keys=%d)", len(typed))
+		case []any:
+			return fmt.Sprintf("array(len=%d)", len(typed))
+		default:
+			return summarizeScalar("", typed)
+		}
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		return SummarizeJSONObject(typed, depth)
+	case []any:
+		return SummarizeJSONArray(typed, depth)
+	default:
+		return summarizeScalar("", typed)
+	}
+}
+
+// SummarizeJSONObject 返回 JSON 对象的脱敏摘要。
+func SummarizeJSONObject(object map[string]any, depth int) map[string]any {
+	keys := make([]string, 0, len(object))
+	for key := range object {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if len(keys) > summaryMaxKeys {
+		keys = keys[:summaryMaxKeys]
+	}
+	summary := make(map[string]any, len(keys)+1)
+	for _, key := range keys {
+		summary[key] = SummarizeFieldValue(key, object[key], depth+1)
+	}
+	if len(object) > len(keys) {
+		summary["_truncated_keys"] = len(object) - len(keys)
+	}
+	return summary
+}
+
+// SummarizeJSONArray 返回 JSON 数组的脱敏摘要。
+func SummarizeJSONArray(items []any, depth int) map[string]any {
+	summary := map[string]any{
+		"type": "array",
+		"len":  len(items),
+	}
+	if len(items) == 0 {
+		return summary
+	}
+	sample := make([]any, 0, MinInt(len(items), summaryMaxItems))
+	for idx, item := range items {
+		if idx >= summaryMaxItems {
+			break
+		}
+		sample = append(sample, SummarizeJSONValue(item, depth+1))
+	}
+	summary["sample"] = sample
+	return summary
+}
+
+// SummarizeFieldValue 返回单个字段的脱敏摘要。
+func SummarizeFieldValue(key string, value any, depth int) any {
+	if IsSensitiveSummaryKey(key) {
+		return MaskSensitiveString(fmt.Sprint(value))
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		return SummarizeJSONObject(typed, depth)
+	case []any:
+		return SummarizeJSONArray(typed, depth)
+	default:
+		return summarizeScalar(key, typed)
+	}
+}
+
+// summarizeScalar 返回标量值的脱敏摘要。
+func summarizeScalar(key string, value any) any {
+	switch typed := value.(type) {
+	case string:
+		return MaskSummaryValue(key, typed)
+	default:
+		return value
+	}
+}
+
+// MaskSummaryValue 对查询参数、表单参数或字符串字段做脱敏摘要。
+func MaskSummaryValue(key string, value string) any {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if IsSensitiveSummaryKey(key) {
+		return MaskSensitiveString(value)
+	}
+	if len(value) > summaryMaxText {
+		return value[:summaryMaxText] + "...(truncated)"
+	}
+	return value
+}
+
+// IsSensitiveSummaryKey 判断字段是否属于敏感字段。
+func IsSensitiveSummaryKey(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	_, ok := defaultSensitiveSummaryKeys[key]
+	return ok
+}
+
+// SetSensitiveSummaryKeys 设置自定义敏感字段列表（可选）。
+func SetSensitiveSummaryKeys(keys map[string]struct{}) {
+	defaultSensitiveSummaryKeys = keys
+}
+
+// MaskSensitiveString 返回敏感文本的脱敏结果。
+func MaskSensitiveString(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if len(value) <= 6 {
+		return value[:1] + "***"
+	}
+	return value[:3] + "***" + value[len(value)-3:]
+}
+
+// LooksLikeJSON 根据首尾字符粗略判断是否为 JSON。
+func LooksLikeJSON(body []byte) bool {
+	if len(body) < 2 {
+		return false
+	}
+	return (body[0] == '{' && body[len(body)-1] == '}') || (body[0] == '[' && body[len(body)-1] == ']')
+}
+
+// MarshalSummary 将摘要对象序列化为稳定的 JSON 字符串。
+func MarshalSummary(value any) string {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "summary_unavailable"
+	}
+	if len(data) > summaryMaxText {
+		return string(data[:summaryMaxText]) + "...(truncated)"
+	}
+	return string(data)
+}
+
+// MinInt 返回两个整数中的较小值。
+func MinInt(left int, right int) int {
+	if left < right {
+		return left
+	}
+	return right
+}
+
+// ==================== 请求体/响应体摘要能力结束 ====================

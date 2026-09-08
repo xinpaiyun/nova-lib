@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,8 +52,16 @@ func RequestID() app.HandlerFunc {
 	}
 }
 
+// defaultCORSAllowHeaders 为未配置 AllowHeaders 时的默认允许请求头列表。
+const defaultCORSAllowHeaders = "Authorization, Content-Type, X-Request-ID, X-Tenant-ID, X-Tenant-Domain"
+
 // CORS 根据配置设置跨域响应头，默认适合本地调试，生产可收敛允许来源。
+// AllowHeaders 可覆盖允许请求头列表，MaxAgeSeconds 大于 0 时输出预检缓存时间。
 func CORS(cfg config.CORSConfig) app.HandlerFunc {
+	allowHeaders := defaultCORSAllowHeaders
+	if len(cfg.AllowHeaders) > 0 {
+		allowHeaders = strings.Join(cfg.AllowHeaders, ", ")
+	}
 	return func(ctx context.Context, c *app.RequestContext) {
 		origin := strings.TrimSpace(string(c.GetHeader("Origin")))
 		if allowedOrigin, ok := resolveAllowedOrigin(origin, cfg); ok {
@@ -62,8 +71,11 @@ func CORS(cfg config.CORSConfig) app.HandlerFunc {
 		if cfg.AllowCredentials {
 			c.Response.Header.Set("Access-Control-Allow-Credentials", "true")
 		}
-		c.Response.Header.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Request-ID, X-Tenant-ID, X-Tenant-Domain")
+		c.Response.Header.Set("Access-Control-Allow-Headers", allowHeaders)
 		c.Response.Header.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		if cfg.MaxAgeSeconds > 0 {
+			c.Response.Header.Set("Access-Control-Max-Age", strconv.Itoa(cfg.MaxAgeSeconds))
+		}
 		if string(c.Method()) == "OPTIONS" {
 			c.AbortWithStatus(204)
 			return

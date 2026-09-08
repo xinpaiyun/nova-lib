@@ -24,7 +24,7 @@
 | `password` | 密码基础校验 | ✅ 已迁入 |
 | `logging` | logrus JSON 结构化日志 + hlog 适配 + 请求追踪 ID + GORM 日志适配器 | ✅ v1.3.0 |
 | `metrics` | 进程内 HTTP 请求指标记录与快照 | ✅ v1.3.0 |
-| `middleware` | Hertz 通用中间件：RequestID/CORS/安全头/Recovery/访问日志（SkipPaths + 慢请求告警）/限流/请求体大小限制（BodyLimit）/租户解析/JWT 鉴权（会话校验与日志落库通过回调注入） | ✅ v1.3.0 |
+| `middleware` | Hertz 通用中间件：RequestID/CORS（可配置允许请求头与预检缓存）/安全头/Recovery/访问日志（SkipPaths + 慢请求告警）/限流/请求体大小限制（BodyLimit）/租户解析/JWT 鉴权（会话校验与日志落库通过回调注入） | ✅ v1.3.0 |
 
 ### 第三方能力
 
@@ -39,6 +39,7 @@
 | `ocr` | 阿里云 OCR：通用文字 / 身份证 / 行驶证识别（URL 与二进制流） | ✅ v1.1.0 |
 | `openai` | OpenAI 兼容协议：文本与视觉对话（含 token 用量统计） | ✅ v1.1.0 |
 | `shengwang` | 声网：RTC/灵动课堂 token 签发、实时转写任务 | ✅ v1.1.0 |
+| `ffmpeg` | ffmpeg 进程封装：命令解析、WebM→MP4 转码、路书总结视频生成（纯标准库绘制，无 CGO 依赖） | ✅ v1.13.0 |
 
 ### 平台能力
 

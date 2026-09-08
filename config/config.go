@@ -65,6 +65,10 @@ func (c JWTConfig) TokenTTL() time.Duration {
 type CORSConfig struct {
 	AllowedOrigins   []string `yaml:"allowed_origins"`
 	AllowCredentials bool     `yaml:"allow_credentials"`
+	// AllowHeaders 覆盖 Access-Control-Allow-Headers 响应头；为空时使用内置默认列表。
+	AllowHeaders []string `yaml:"allow_headers"`
+	// MaxAgeSeconds 为预检结果缓存秒数；小于等于 0 时不输出 Access-Control-Max-Age。
+	MaxAgeSeconds int `yaml:"max_age_seconds"`
 }
 
 // RateLimitConfig 定义 API 请求限流配置。

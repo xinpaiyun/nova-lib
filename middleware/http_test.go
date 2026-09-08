@@ -89,6 +89,46 @@ func TestResolveAllowedOrigin(t *testing.T) {
 	}
 }
 
+// TestCORSHeadersAndMaxAge 验证 AllowHeaders 覆盖与 Max-Age 输出。
+func TestCORSHeadersAndMaxAge(t *testing.T) {
+	c := app.NewContext(0)
+	c.Request.Header.Set("Origin", "https://admin.example.com")
+	c.Request.Header.SetMethod("OPTIONS")
+	c.SetHandlers(app.HandlersChain{CORS(config.CORSConfig{
+		AllowedOrigins: []string{"https://admin.example.com"},
+		AllowHeaders:   []string{"Content-Type", "Authorization", "X-Requested-With"},
+		MaxAgeSeconds:  86400,
+	})})
+	c.Next(context.Background())
+
+	if got := string(c.Response.Header.Peek("Access-Control-Allow-Origin")); got != "https://admin.example.com" {
+		t.Fatalf("Access-Control-Allow-Origin = %q", got)
+	}
+	if got := string(c.Response.Header.Peek("Access-Control-Allow-Headers")); got != "Content-Type, Authorization, X-Requested-With" {
+		t.Fatalf("Access-Control-Allow-Headers = %q", got)
+	}
+	if got := string(c.Response.Header.Peek("Access-Control-Max-Age")); got != "86400" {
+		t.Fatalf("Access-Control-Max-Age = %q, want 86400", got)
+	}
+	if c.Response.StatusCode() != 204 {
+		t.Fatalf("preflight status = %d, want 204", c.Response.StatusCode())
+	}
+}
+
+// TestCORSDefaultHeadersKeepBackwardCompatible 验证未配置时保持默认允许头且不输出 Max-Age。
+func TestCORSDefaultHeadersKeepBackwardCompatible(t *testing.T) {
+	c := app.NewContext(0)
+	c.SetHandlers(app.HandlersChain{CORS(config.CORSConfig{})})
+	c.Next(context.Background())
+
+	if got := string(c.Response.Header.Peek("Access-Control-Allow-Headers")); got != "Authorization, Content-Type, X-Request-ID, X-Tenant-ID, X-Tenant-Domain" {
+		t.Fatalf("Access-Control-Allow-Headers = %q", got)
+	}
+	if got := string(c.Response.Header.Peek("Access-Control-Max-Age")); got != "" {
+		t.Fatalf("Access-Control-Max-Age = %q, want empty", got)
+	}
+}
+
 // TestSecurityHeaders 验证默认安全响应头可按配置启停。
 func TestSecurityHeaders(t *testing.T) {
 	c := app.NewContext(0)

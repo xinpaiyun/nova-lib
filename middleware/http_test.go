@@ -9,6 +9,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 
+	"github.com/xinpaiyun/nova-lib/auth"
 	"github.com/xinpaiyun/nova-lib/config"
 )
 
@@ -296,5 +297,84 @@ func TestAccessLogSkipPaths(t *testing.T) {
 	normal.Next(context.Background())
 	if !other {
 		t.Fatalf("recorder should be invoked for path not in SkipPaths")
+	}
+}
+
+// stubFailingStore 模拟 Redis 连接故障等基础设施错误。
+type stubFailingStore struct{}
+
+func (stubFailingStore) SetJSON(context.Context, string, any, time.Duration) error {
+	return errors.New("redis connection refused")
+}
+
+func (stubFailingStore) GetJSON(context.Context, string, any) (bool, error) {
+	return false, errors.New("redis connection refused")
+}
+
+func (stubFailingStore) Del(context.Context, string) error {
+	return errors.New("redis connection refused")
+}
+
+// TestRequireSessionAuthDistinguishesAuthFromInfra 验证会话失效返回 401、
+// 基础设施故障返回 500，Redis 故障不再被伪装成「登录状态已失效」。
+func TestRequireSessionAuthDistinguishesAuthFromInfra(t *testing.T) {
+	auth.SetCache(auth.NewMemoryStore())
+	t.Cleanup(func() { auth.SetCache(nil) })
+
+	// run 执行一次经过鉴权中间件的请求，返回状态码、响应体和请求上下文。
+	run := func(t *testing.T, authorization string) (int, string, *app.RequestContext) {
+		t.Helper()
+		c := app.NewContext(0)
+		if authorization != "" {
+			c.Request.Header.Set("Authorization", authorization)
+		}
+		c.Set(requestIDKey, "req-auth")
+		c.SetHandlers(app.HandlersChain{
+			RequireSessionAuth(),
+			func(_ context.Context, c *app.RequestContext) {
+				c.Status(200)
+			},
+		})
+		c.Next(context.Background())
+		return c.Response.StatusCode(), string(c.Response.Body()), c
+	}
+
+	// 未携带 Token → 401 请先登录
+	if status, body, _ := run(t, ""); status != 401 || !strings.Contains(body, "请先登录") {
+		t.Fatalf("missing token: status=%d body=%q", status, body)
+	}
+
+	// 会话不存在 → 401 登录状态已失效（业务语义）
+	if status, body, _ := run(t, "Bearer no-such-token"); status != 401 || !strings.Contains(body, "登录状态已失效") {
+		t.Fatalf("unknown token: status=%d body=%q", status, body)
+	}
+
+	// 有效会话 → 200，身份声明写入请求上下文
+	err := auth.StoreSession(context.Background(), "valid-token", auth.Session{
+		UserID:    42,
+		TenantID:  7,
+		RoleCode:  "super_admin",
+		AppType:   "admin",
+		OpenID:    "open-abc",
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("store session err=%v", err)
+	}
+	status, body, c := run(t, "Bearer valid-token")
+	if status != 200 {
+		t.Fatalf("valid token: status=%d body=%q", status, body)
+	}
+	if userID, ok := UserIDFromContext(c); !ok || userID != 42 {
+		t.Fatalf("UserIDFromContext() = (%d, %v), want (42, true)", userID, ok)
+	}
+	if RoleCodeFromContext(c) != "super_admin" || AppTypeFromContext(c) != "admin" {
+		t.Fatalf("identity mismatch: role=%q appType=%q", RoleCodeFromContext(c), AppTypeFromContext(c))
+	}
+
+	// Redis 故障 → 500 服务暂时不可用（基础设施错误必须暴露，不能返回 401）
+	auth.SetCache(stubFailingStore{})
+	if status, body, _ := run(t, "Bearer valid-token"); status != 500 || !strings.Contains(body, "服务暂时不可用") {
+		t.Fatalf("infra failure: status=%d body=%q", status, body)
 	}
 }

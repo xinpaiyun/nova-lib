@@ -12,11 +12,23 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/xinpaiyun/nova-lib/config"
+	"github.com/xinpaiyun/nova-lib/logging"
 	"github.com/xinpaiyun/nova-lib/response"
 	sharedredis "github.com/xinpaiyun/nova-lib/redis"
 )
 
 const rateLimitWindow = time.Minute
+
+// rateLimitFallbackWarnOnce 保证限流降级告警只输出一次，避免热路径刷屏。
+var rateLimitFallbackWarnOnce sync.Once
+
+// warnRateLimitFallback 首次降级为进程内限流时告警：
+// 多实例部署下该模式不再共享计数、防护效果大减，必须让该状态在日志中可见。
+func warnRateLimitFallback() {
+	rateLimitFallbackWarnOnce.Do(func() {
+		logging.Warn("rate limit falls back to in-process counting: redis client not initialized or unavailable, per-instance limits are not shared")
+	})
+}
 
 // RateLimit 按客户端 IP 对请求做固定窗口限流，Redis 启用时跨实例共享计数。
 func RateLimit(cfg config.RateLimitConfig) app.HandlerFunc {
@@ -38,6 +50,7 @@ func RateLimit(cfg config.RateLimitConfig) app.HandlerFunc {
 				return
 			}
 		}
+		warnRateLimitFallback()
 		if ok, retryAfter := limiter.allow(key, time.Now()); !ok {
 			rejectRateLimited(c, retryAfter)
 			return

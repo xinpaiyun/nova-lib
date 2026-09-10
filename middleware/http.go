@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"runtime/debug"
 	"strconv"
@@ -247,7 +248,24 @@ func RequireSessionAuth() app.HandlerFunc {
 		}
 		claims, err := auth.ResolveClaims(ctx, tokenValue)
 		if err != nil {
-			response.Error(c, 401, "登录状态已失效")
+			if errors.Is(err, auth.ErrSessionInvalid) {
+				// 曾登录用户的会话失效是排查「重启掉线」的关键信号，打 Info 便于关联时间线；
+				// 未携带 Token 属游客常态，不记录。
+				logging.Info("session auth rejected",
+					"request_id", RequestIDFromContext(c),
+					"error", err,
+				)
+				response.Error(c, 401, "登录状态已失效")
+				c.Abort()
+				return
+			}
+			// Redis 未初始化、连接故障等基础设施错误必须暴露为 500，
+			// 不能伪装成「登录状态已失效」掩盖真实故障。
+			logging.Error("resolve session failed",
+				"request_id", RequestIDFromContext(c),
+				"error", err,
+			)
+			response.Error(c, 500, "服务暂时不可用")
 			c.Abort()
 			return
 		}

@@ -3,6 +3,7 @@ package identity
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,9 +13,18 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 	"gorm.io/gorm/schema"
 
-	"github.com/xinpaiyun/nova-lib/cache"
+	"github.com/xinpaiyun/nova-lib/auth"
 	"github.com/xinpaiyun/nova-lib/config"
 )
+
+// TestMain 为会话签发注入进程内存存储：
+// 默认 Redis 存储在 redis.Init 未调用时会 fail fast，测试环境用内存实现替代。
+func TestMain(m *testing.M) {
+	auth.SetCache(auth.NewMemoryStore())
+	code := m.Run()
+	auth.SetCache(nil)
+	os.Exit(code)
+}
 
 func newTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
@@ -193,7 +203,6 @@ func TestEnsureSuperAdminIdempotent(t *testing.T) {
 }
 
 func TestIssuerSessionRoundTrip(t *testing.T) {
-	defer cache.Flush()
 	db := newTestDB(t)
 	_ = db
 	user := &User{ID: 42, Status: StatusEnabled}

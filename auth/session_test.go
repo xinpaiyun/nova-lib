@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/xinpaiyun/nova-lib/cache"
 )
 
 func TestMain(m *testing.M) {
@@ -99,5 +102,44 @@ func TestDefaultStoreFailsFastWithoutRedis(t *testing.T) {
 	}
 	if err := RevokeSession(context.Background(), token); !errors.Is(err, ErrRedisNotInitialized) {
 		t.Fatalf("RevokeSession error = %v, want ErrRedisNotInitialized", err)
+	}
+}
+
+// TestCacheSessionStoreWithRedka 验证 NewCacheSessionStore 跟随 cache 后端：
+// 无 Redis 时走 Redka 本地缓存（dev 模式），会话存储、解析、登出全部可用，
+// 而默认的 redisSessionStore 在此场景下会 fail fast。
+func TestCacheSessionStoreWithRedka(t *testing.T) {
+	if err := cache.InitLocal(filepath.Join(t.TempDir(), "session.db")); err != nil {
+		t.Fatalf("cache.InitLocal() error = %v", err)
+	}
+	t.Cleanup(func() { _ = cache.CloseLocal() })
+	SetCache(NewCacheSessionStore())
+	defer SetCache(NewMemoryStore())
+
+	token, err := GenerateToken()
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+	session := Session{
+		UserID:    9,
+		TenantID:  4,
+		RoleCode:  "staff",
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+	if err := StoreSession(context.Background(), token, session); err != nil {
+		t.Fatalf("StoreSession: %v", err)
+	}
+	loaded, err := ResolveSession(context.Background(), token)
+	if err != nil {
+		t.Fatalf("ResolveSession: %v", err)
+	}
+	if loaded.UserID != 9 || loaded.TenantID != 4 || loaded.RoleCode != "staff" {
+		t.Fatalf("loaded session mismatch: %#v", loaded)
+	}
+	if err := RevokeSession(context.Background(), token); err != nil {
+		t.Fatalf("RevokeSession: %v", err)
+	}
+	if _, err := ResolveSession(context.Background(), token); !errors.Is(err, ErrSessionInvalid) {
+		t.Fatalf("revoked token error = %v, want ErrSessionInvalid", err)
 	}
 }

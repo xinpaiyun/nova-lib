@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -79,5 +80,132 @@ func TestGetJSONPropagatesRedisFailure(t *testing.T) {
 	}
 	if errors.Is(err, ErrMiss) {
 		t.Fatalf("GetJSON() error should not be ErrMiss: %v", err)
+	}
+}
+
+// TestRedkaKVBackend 验证 Redka 本地缓存作为 KV 后端时的读写回环与 miss 归一化。
+func TestRedkaKVBackend(t *testing.T) {
+	if err := InitLocal(filepath.Join(t.TempDir(), "cache.db")); err != nil {
+		t.Fatalf("InitLocal() error = %v", err)
+	}
+	t.Cleanup(func() { _ = CloseLocal() })
+
+	ctx := context.Background()
+	if err := Set(ctx, "cache:redka:kv", "v1", time.Minute); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+	got, err := Get(ctx, "cache:redka:kv")
+	if err != nil || got != "v1" {
+		t.Fatalf("Get() = (%q, %v), want (v1, nil)", got, err)
+	}
+	if _, err := Get(ctx, "cache:redka:miss"); !errors.Is(err, ErrMiss) {
+		t.Fatalf("Get() miss error = %v, want ErrMiss", err)
+	}
+
+	if err := SetJSON(ctx, "cache:redka:json", map[string]int{"n": 1}, time.Minute); err != nil {
+		t.Fatalf("SetJSON() error = %v", err)
+	}
+	var out map[string]int
+	ok, err := GetJSON(ctx, "cache:redka:json", &out)
+	if err != nil || !ok || out["n"] != 1 {
+		t.Fatalf("GetJSON() = (out=%v ok=%v err=%v), want (n=1, true, nil)", out, ok, err)
+	}
+
+	if _, err := GetDel(ctx, "cache:redka:kv"); err != nil {
+		t.Fatalf("GetDel() error = %v", err)
+	}
+	if _, err := Get(ctx, "cache:redka:kv"); !errors.Is(err, ErrMiss) {
+		t.Fatalf("Get() after GetDel error = %v, want ErrMiss", err)
+	}
+
+	if err := Set(ctx, "cache:redka:del", "x", time.Minute); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+	if err := Del(ctx, "cache:redka:del"); err != nil {
+		t.Fatalf("Del() error = %v", err)
+	}
+	if _, err := Get(ctx, "cache:redka:del"); !errors.Is(err, ErrMiss) {
+		t.Fatalf("Get() after Del error = %v, want ErrMiss", err)
+	}
+}
+
+// TestRedkaListBackend 验证 List 队列操作在 Redka 后端下的回环与 miss 语义。
+func TestRedkaListBackend(t *testing.T) {
+	if err := InitLocal(filepath.Join(t.TempDir(), "cache-list.db")); err != nil {
+		t.Fatalf("InitLocal() error = %v", err)
+	}
+	t.Cleanup(func() { _ = CloseLocal() })
+
+	ctx := context.Background()
+	key := "cache:redka:queue"
+	if err := ListPushBack(ctx, key, "a", "b", "c"); err != nil {
+		t.Fatalf("ListPushBack() error = %v", err)
+	}
+	if n, err := ListLen(ctx, key); err != nil || n != 3 {
+		t.Fatalf("ListLen() = (%d, %v), want (3, nil)", n, err)
+	}
+	first, err := ListPopFront(ctx, key)
+	if err != nil || first != "a" {
+		t.Fatalf("ListPopFront() = (%q, %v), want (a, nil)", first, err)
+	}
+	rest, err := ListPopFrontN(ctx, key, 10)
+	if err != nil || len(rest) != 2 || rest[0] != "b" || rest[1] != "c" {
+		t.Fatalf("ListPopFrontN() = (%v, %v), want ([b c], nil)", rest, err)
+	}
+	if _, err := ListPopFront(ctx, key); !errors.Is(err, ErrMiss) {
+		t.Fatalf("ListPopFront() empty error = %v, want ErrMiss", err)
+	}
+	if _, err := ListPopFrontN(ctx, key, 1); !errors.Is(err, ErrMiss) {
+		t.Fatalf("ListPopFrontN() empty error = %v, want ErrMiss", err)
+	}
+}
+
+// TestListRejectsMemoryFallback 验证即使内存兜底开启，List 操作也不入进程内存：
+// 无后端时显式返回 ErrUnavailable，保证任务队列不发生静默降级。
+func TestListRejectsMemoryFallback(t *testing.T) {
+	_ = CloseLocal()
+	original := clientGetter
+	clientGetter = func() *goredis.Client { return nil }
+	t.Cleanup(func() { clientGetter = original })
+
+	ctx := context.Background()
+	if err := ListPushBack(ctx, "cache:list:nobackend", "v"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("ListPushBack() error = %v, want ErrUnavailable", err)
+	}
+}
+
+// TestUnavailableWithoutBackend 验证 DisableMemoryFallback 后，无后端的 KV 读写
+// 显式返回 ErrUnavailable（fail fast），而不再静默写入进程内存。
+func TestUnavailableWithoutBackend(t *testing.T) {
+	_ = CloseLocal()
+	original := clientGetter
+	clientGetter = func() *goredis.Client { return nil }
+	t.Cleanup(func() {
+		clientGetter = original
+		memoryFallbackEnabled = true
+	})
+	DisableMemoryFallback()
+
+	ctx := context.Background()
+	if err := Set(ctx, "cache:unavailable", "v", time.Minute); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Set() error = %v, want ErrUnavailable", err)
+	}
+	if _, err := Get(ctx, "cache:unavailable"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Get() error = %v, want ErrUnavailable", err)
+	}
+	if _, err := GetDel(ctx, "cache:unavailable"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("GetDel() error = %v, want ErrUnavailable", err)
+	}
+	if err := Del(ctx, "cache:unavailable"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Del() error = %v, want ErrUnavailable", err)
+	}
+	if _, err := ListLen(ctx, "cache:unavailable:q"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("ListLen() error = %v, want ErrUnavailable", err)
+	}
+	if _, err := ListPopFront(ctx, "cache:unavailable:q"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("ListPopFront() error = %v, want ErrUnavailable", err)
+	}
+	if _, err := ListPopFrontN(ctx, "cache:unavailable:q", 1); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("ListPopFrontN() error = %v, want ErrUnavailable", err)
 	}
 }

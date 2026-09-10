@@ -97,6 +97,29 @@ func (redisSessionStore) Del(ctx context.Context, key string) error {
 	return cache.Del(ctx, key)
 }
 
+// cacheSessionStore 是跟随 nova-lib/cache 当前后端的会话存储：
+// Redka 本地缓存（InitLocal，dev 模式）或 Redis（redis.Init），数据不落进程内存。
+// 配合 cache.DisableMemoryFallback() 可保证后端未就绪时读写显式失败（fail fast），
+// 而不是静默降级为进程内存。
+type cacheSessionStore struct{}
+
+// NewCacheSessionStore 创建跟随 cache 后端的会话存储。
+// dev 模式（无 Redis、走 Redka 本地持久化）用它替代默认的 redisSessionStore，
+// 使会话在 air 热重载后依然有效；生产模式走 Redis，行为与默认存储一致。
+func NewCacheSessionStore() SessionStore { return cacheSessionStore{} }
+
+func (cacheSessionStore) SetJSON(ctx context.Context, key string, value any, ttl time.Duration) error {
+	return cache.SetJSON(ctx, key, value, ttl)
+}
+
+func (cacheSessionStore) GetJSON(ctx context.Context, key string, out any) (bool, error) {
+	return cache.GetJSON(ctx, key, out)
+}
+
+func (cacheSessionStore) Del(ctx context.Context, key string) error {
+	return cache.Del(ctx, key)
+}
+
 // MemoryStore 是基于进程内存的 SessionStore 实现，仅供测试或本地调试使用：
 // 数据不跨进程共享、重启即丢失，生产环境必须使用默认 Redis 存储。
 type MemoryStore struct {

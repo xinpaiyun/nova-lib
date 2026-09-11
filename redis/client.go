@@ -12,17 +12,9 @@ import (
 
 var client *redis.Client
 
-// Init 初始化全局 Redis 客户端并验证连接。
-// 注意：Enabled=false 时不会创建客户端（全局保持 nil），
-// cache 将静默回退到进程内存，而依赖 Redis 的功能（如 auth 会话存储）会直接报错；
-// 需要会话等持久语义的服务必须保证 Enabled=true 并在启动阶段调用本函数。
+// Init 初始化全局 Redis 客户端并验证连接。配置了 Redis（addr 非空）时由 bootstrap 调用；
+// 未配置 Redis 的 dev 模式应改调 cache.InitLocal 启用 Redka 本地缓存。
 func Init(cfg config.RedisConfig) error {
-	if !cfg.Enabled {
-		// 配置遗漏的关键信号：全局客户端保持 nil，下游 cache 静默回退进程内存、
-		// auth 会话 fail fast，必须在启动日志中可见，避免重启掉线类问题无迹可循。
-		logging.Warn("redis disabled in config, global client not initialized: cache falls back to in-process memory, session storage will fail fast")
-		return nil
-	}
 	created, err := NewClient(cfg)
 	if err != nil {
 		return err
@@ -47,7 +39,7 @@ func NewClient(cfg config.RedisConfig) (*redis.Client, error) {
 	return instance, nil
 }
 
-// Client 返回已初始化的 Redis 客户端；未启用时返回 nil。
+// Client 返回已初始化的 Redis 客户端；未初始化时返回 nil。
 func Client() *redis.Client {
 	return client
 }

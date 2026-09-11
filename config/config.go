@@ -43,8 +43,8 @@ func (d DatabaseConfig) DSN() string {
 }
 
 // RedisConfig 定义 Redis 连接配置。
+// 是否启用由 addr 决定：addr 非空即启用，不设独立开关字段。
 type RedisConfig struct {
-	Enabled  bool   `yaml:"enabled"`
 	Addr     string `yaml:"addr"`
 	Password string `yaml:"password"`
 	DB       int    `yaml:"db"`

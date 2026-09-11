@@ -98,9 +98,8 @@ func (redisSessionStore) Del(ctx context.Context, key string) error {
 }
 
 // cacheSessionStore 是跟随 nova-lib/cache 当前后端的会话存储：
-// Redka 本地缓存（InitLocal，dev 模式）或 Redis（redis.Init），数据不落进程内存。
-// 配合 cache.DisableMemoryFallback() 可保证后端未就绪时读写显式失败（fail fast），
-// 而不是静默降级为进程内存。
+// Redka 本地缓存（InitLocal，dev 模式）或 Redis（redis.Init），数据不落进程内存；
+// 后端未初始化时读写显式失败（ErrUnavailable），不会静默降级。
 type cacheSessionStore struct{}
 
 // NewCacheSessionStore 创建跟随 cache 后端的会话存储。

@@ -1,13 +1,13 @@
 // Package cache 提供 Redis 缓存读写。
 //
-// 后端选择（按优先级）：
-//  1. Redka 本地持久化缓存：调用 InitLocal 启用（dev 模式替代 Redis，数据落 SQLite，重启不丢）；
-//  2. Redis：调用 nova-lib/redis 的 Init 初始化全局单例后自动启用；
-//  3. 进程内存兜底：默认开启（仅 KV，数据不跨进程、重启即失，首次触发时输出 Warn）。
+// 后端由 bootstrap 按配置二选一初始化，本包不做选择、不设进程内存兜底：
+//   - 配置了 Redis：调用 nova-lib/redis 的 Init 初始化全局单例，读写走 Redis；
+//   - 未配置 Redis（dev 模式）：调用 InitLocal 启用 Redka 本地持久化缓存，
+//     数据落 SQLite，进程重启不丢。
 //
-// 队列类操作（List*）不支持进程内存兜底：无后端时返回 ErrUnavailable。
-// 需要严格拒绝静默降级的服务（如任务队列、会话）可在 bootstrap 调用
-// DisableMemoryFallback，此后无后端时所有读写返回 ErrUnavailable。
+// 两者都未初始化时所有读写返回 ErrUnavailable（fail fast，无静默降级）：
+// 缓存后端缺失属于配置遗漏，必须在启动与调用路径上显式暴露，而不是用
+// 进程内存悄悄兜底（数据不跨进程、重启即失）。
 package cache
 
 import (
@@ -31,22 +31,9 @@ import (
 )
 
 var localDB *redka.DB
-var memoryStore sync.Map
-var memoryFallbackEnabled = true
-
-// memoryFallbackWarnOnce 保证内存兜底告警只输出一次，避免热路径刷屏。
-var memoryFallbackWarnOnce sync.Once
 
 // listUnavailableWarnOnce 保证 List 操作后端缺失告警只输出一次。
 var listUnavailableWarnOnce sync.Once
-
-// warnMemoryFallback 首次触发内存兜底时告警：
-// Redis 未初始化意味着数据不跨进程、重启即失，必须让该状态在日志中可见。
-func warnMemoryFallback() {
-	memoryFallbackWarnOnce.Do(func() {
-		logging.Warn("redis client not initialized, cache falls back to in-process memory: data will not survive restart, call redis.Init() at bootstrap")
-	})
-}
 
 // warnListUnavailable List 操作无可用后端时告警一次。
 func warnListUnavailable() {
@@ -61,9 +48,8 @@ var clientGetter = redis.Client
 // ErrMiss 表示缓存未命中（各后端的 miss 统一归一化为该错误）。
 var ErrMiss = errors.New("cache miss")
 
-// ErrUnavailable 表示无可用缓存后端（Redis 未初始化且未启用本地缓存），
-// 且进程内存兜底已被 DisableMemoryFallback 关闭或该操作不支持内存兜底。
-var ErrUnavailable = errors.New("cache backend unavailable: redis not initialized")
+// ErrUnavailable 表示无可用缓存后端（未调用 InitLocal，且 Redis 未初始化）。
+var ErrUnavailable = errors.New("cache backend unavailable: call cache.InitLocal() or redis.Init() at bootstrap")
 
 // InitLocal 启用 Redka 本地持久化缓存（dev 模式替代 Redis），数据写入本地 SQLite 文件。
 // 使用纯 Go 的 "sqlite" 驱动，CGO_ENABLED=0 交叉编译可用；初始化失败返回错误，
@@ -103,18 +89,8 @@ func BackendReady() bool {
 	return localDB != nil || clientGetter() != nil
 }
 
-// DisableMemoryFallback 关闭进程内存兜底：无可用后端时 KV 读写返回 ErrUnavailable，
-// 而不是静默写进程内存。需要拒绝静默降级的服务（任务队列、会话等）在 bootstrap 调用。
-func DisableMemoryFallback() {
-	memoryFallbackEnabled = false
-}
-
-type memoryItem struct {
-	value     string
-	expiresAt time.Time
-}
-
-// Set 写入缓存；后端优先级为 Redka 本地 > Redis > 进程内存。
+// Set 写入缓存；后端为 InitLocal 启用的 Redka（优先）或 redis.Init 启用的 Redis，
+// 两者都未初始化返回 ErrUnavailable。
 func Set(ctx context.Context, key, value string, ttl time.Duration) error {
 	if localDB != nil {
 		if ttl > 0 {
@@ -125,12 +101,7 @@ func Set(ctx context.Context, key, value string, ttl time.Duration) error {
 	if client := clientGetter(); client != nil {
 		return client.Set(ctx, key, value, ttl).Err()
 	}
-	if !memoryFallbackEnabled {
-		return ErrUnavailable
-	}
-	warnMemoryFallback()
-	memoryStore.Store(key, memoryItem{value: value, expiresAt: time.Now().Add(ttl)})
-	return nil
+	return ErrUnavailable
 }
 
 // Get 读取缓存；未命中统一返回 ErrMiss，Redis 连接故障等真实错误原样透传。
@@ -155,20 +126,7 @@ func Get(ctx context.Context, key string) (string, error) {
 		}
 		return value, nil
 	}
-	if !memoryFallbackEnabled {
-		return "", ErrUnavailable
-	}
-	warnMemoryFallback()
-	raw, ok := memoryStore.Load(key)
-	if !ok {
-		return "", ErrMiss
-	}
-	item, ok := raw.(memoryItem)
-	if !ok || time.Now().After(item.expiresAt) {
-		memoryStore.Delete(key)
-		return "", ErrMiss
-	}
-	return item.value, nil
+	return "", ErrUnavailable
 }
 
 // GetDel 原子读取并删除缓存，适用于短信验证码等一次性令牌。
@@ -195,19 +153,7 @@ func GetDel(ctx context.Context, key string) (string, error) {
 		}
 		return value, nil
 	}
-	if !memoryFallbackEnabled {
-		return "", ErrUnavailable
-	}
-	warnMemoryFallback()
-	raw, ok := memoryStore.LoadAndDelete(key)
-	if !ok {
-		return "", ErrMiss
-	}
-	item, ok := raw.(memoryItem)
-	if !ok || time.Now().After(item.expiresAt) {
-		return "", ErrMiss
-	}
-	return item.value, nil
+	return "", ErrUnavailable
 }
 
 // Del 删除缓存。
@@ -219,20 +165,7 @@ func Del(ctx context.Context, key string) error {
 	if client := clientGetter(); client != nil {
 		return client.Del(ctx, key).Err()
 	}
-	if !memoryFallbackEnabled {
-		return ErrUnavailable
-	}
-	warnMemoryFallback()
-	memoryStore.Delete(key)
-	return nil
-}
-
-// Flush 清空进程内存回退缓存；Redis 与 Redka 模式下为空操作，避免误清持久化数据。
-func Flush() {
-	memoryStore.Range(func(key, _ any) bool {
-		memoryStore.Delete(key)
-		return true
-	})
+	return ErrUnavailable
 }
 
 // SetJSON 将对象序列化为 JSON 后写入缓存。
@@ -245,7 +178,7 @@ func SetJSON(ctx context.Context, key string, value any, ttl time.Duration) erro
 }
 
 // GetJSON 读取缓存并反序列化到 out；未命中返回 (false, nil)。
-// Redis 未初始化、连接故障等真实错误会透传，供上层区分「未命中」与「服务故障」。
+// 后端未初始化、连接故障等真实错误会透传，供上层区分「未命中」与「服务故障」。
 func GetJSON(ctx context.Context, key string, out any) (bool, error) {
 	raw, err := Get(ctx, key)
 	if err != nil {
@@ -265,7 +198,8 @@ func GetJSON(ctx context.Context, key string, out any) (bool, error) {
 }
 
 // ListPushBack 向列表尾部追加元素，用于轻量任务队列。
-// 仅支持 Redka 本地与 Redis 后端，无后端时返回 ErrUnavailable（不入进程内存）。
+// 后端为 InitLocal 启用的 Redka（优先）或 redis.Init 启用的 Redis，
+// 两者都未初始化返回 ErrUnavailable。
 func ListPushBack(ctx context.Context, key string, values ...string) error {
 	if len(values) == 0 {
 		return nil

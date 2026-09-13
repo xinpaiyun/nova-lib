@@ -133,6 +133,7 @@ type SMSConfig struct {
 	AccessKeySecret string `yaml:"access_key_secret"`
 	SignName        string `yaml:"sign_name"`
 	TemplateCode    string `yaml:"template_code"`
+	Endpoint        string `yaml:"endpoint"` // 可选，自定义网关地址，默认 dysmsapi.aliyuncs.com
 }
 
 // WechatConfig 定义微信小程序登录与微信支付 V3 配置。

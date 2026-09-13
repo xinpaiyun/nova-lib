@@ -115,8 +115,24 @@ func SendTemplateWithConfig(ctx context.Context, c config.SMSConfig, sender *dys
 		TemplateCode:  stringPtr(templateCode),
 		TemplateParam: stringPtr(string(payload)),
 	}
-	if _, err := target.SendSms(req); err != nil {
+	resp, err := target.SendSms(req)
+	if err != nil {
 		return fmt.Errorf("短信发送失败，请稍后重试")
+	}
+	if err := validateSendSmsResult(resp); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateSendSmsResult 校验阿里云发送结果，业务失败（签名/模板错误、余额不足、频控等）时返回错误。
+// 阿里云网关业务失败时 HTTP 仍返回 200，需校验响应体的 Code 字段。
+func validateSendSmsResult(resp *dysmsapi.SendSmsResponse) error {
+	if resp == nil || resp.Body == nil {
+		return fmt.Errorf("短信网关无响应，请稍后重试")
+	}
+	if code := strings.TrimSpace(stringVal(resp.Body.Code)); code != "" && code != "OK" {
+		return fmt.Errorf("短信发送失败，请稍后重试（%s: %s）", code, strings.TrimSpace(stringVal(resp.Body.Message)))
 	}
 	return nil
 }
@@ -145,10 +161,14 @@ func generateCode() string {
 
 // newAliyunClient 创建阿里云短信客户端。
 func newAliyunClient(c config.SMSConfig) (*dysmsapi.Client, error) {
+	endpoint := strings.TrimSpace(c.Endpoint)
+	if endpoint == "" {
+		endpoint = "dysmsapi.aliyuncs.com"
+	}
 	openAPICfg := &openapi.Config{
 		AccessKeyId:     &c.AccessKeyID,
 		AccessKeySecret: &c.AccessKeySecret,
-		Endpoint:        stringPtr("dysmsapi.aliyuncs.com"),
+		Endpoint:        &endpoint,
 	}
 	return dysmsapi.NewClient(openAPICfg)
 }
@@ -156,4 +176,12 @@ func newAliyunClient(c config.SMSConfig) (*dysmsapi.Client, error) {
 // stringPtr 返回字符串指针。
 func stringPtr(value string) *string {
 	return &value
+}
+
+// stringVal 返回字符串指针指向的值，空指针返回空串。
+func stringVal(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }

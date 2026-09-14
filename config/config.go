@@ -176,6 +176,7 @@ type AIConfig struct {
 	Model       string `yaml:"model"`
 	TextModel   string `yaml:"text_model"`
 	VisionModel string `yaml:"vision_model"`
+	OCRModel    string `yaml:"ocr_model"`
 	TimeoutSec  int    `yaml:"timeout_sec"`
 }
 

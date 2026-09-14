@@ -106,6 +106,18 @@ func (c *Client) DefaultVisionModel() string {
 	return c.cfg.VisionModel
 }
 
+// DefaultOCRModel 返回当前默认 OCR 模型名称；未单独配置时回退到视觉模型，
+// 兼容历史上把 OCR 模型配置在 vision_model 的存量项目。
+func (c *Client) DefaultOCRModel() string {
+	if c == nil {
+		return defaultVisionModel
+	}
+	if model := strings.TrimSpace(c.cfg.OCRModel); model != "" {
+		return model
+	}
+	return c.DefaultVisionModel()
+}
+
 // CompleteText 使用 Chat Completions 执行一次文本生成。
 func (c *Client) CompleteText(ctx context.Context, req CompleteTextReq) (*CompleteTextResp, error) {
 	if !c.IsEnabled() {
@@ -161,6 +173,17 @@ func DataURL(mimeType string, data []byte) string {
 
 // CompleteVision 使用视觉模型基于图片 URL 执行一次理解生成。
 func (c *Client) CompleteVision(ctx context.Context, req CompleteVisionReq) (*CompleteTextResp, error) {
+	return c.completeImage(ctx, req, c.DefaultVisionModel(), "vision")
+}
+
+// CompleteOCR 使用 OCR 模型基于图片 URL 执行一次文字识别/图片理解；
+// 未配置 ocr_model 时回退视觉模型，适合错题识别、证照识别等纯文字提取场景。
+func (c *Client) CompleteOCR(ctx context.Context, req CompleteVisionReq) (*CompleteTextResp, error) {
+	return c.completeImage(ctx, req, c.DefaultOCRModel(), "ocr")
+}
+
+// completeImage 执行基于图片的补全请求，scenario 仅用于日志区分。
+func (c *Client) completeImage(ctx context.Context, req CompleteVisionReq, defaultModel string, scenario string) (*CompleteTextResp, error) {
 	if !c.IsEnabled() {
 		return nil, errors.New("OpenAI 未启用")
 	}
@@ -170,7 +193,7 @@ func (c *Client) CompleteVision(ctx context.Context, req CompleteVisionReq) (*Co
 	}
 	model := strings.TrimSpace(req.Model)
 	if model == "" {
-		model = c.DefaultVisionModel()
+		model = defaultModel
 	}
 	detail := strings.TrimSpace(req.ImageDetail)
 	if detail == "" {
@@ -198,18 +221,18 @@ func (c *Client) CompleteVision(ctx context.Context, req CompleteVisionReq) (*Co
 		params.MaxTokens = openaisdk.Int(req.MaxTokens)
 	}
 	startedAt := time.Now()
-	slog.Debug("openai vision request", "model", model, "image", summarizeImageURL(imageURL), "image_detail", detail, "max_tokens", req.MaxTokens, "temperature", req.Temperature)
+	slog.Debug("openai "+scenario+" request", "model", model, "image", summarizeImageURL(imageURL), "image_detail", detail, "max_tokens", req.MaxTokens, "temperature", req.Temperature)
 	resp, err := c.client.Chat.Completions.New(ctx, params)
 	if err != nil {
-		slog.Error("openai vision request failed", "model", model, "elapsed_ms", time.Since(startedAt).Milliseconds(), "error", err.Error())
+		slog.Error("openai "+scenario+" request failed", "model", model, "elapsed_ms", time.Since(startedAt).Milliseconds(), "error", err.Error())
 		return nil, err
 	}
 	if len(resp.Choices) == 0 {
-		slog.Warn("openai vision response empty", "model", model, "elapsed_ms", time.Since(startedAt).Milliseconds())
+		slog.Warn("openai "+scenario+" response empty", "model", model, "elapsed_ms", time.Since(startedAt).Milliseconds())
 		return nil, errors.New("OpenAI 响应为空")
 	}
 	content := resp.Choices[0].Message.Content
-	slog.Debug("openai vision response", "model", resp.Model, "elapsed_ms", time.Since(startedAt).Milliseconds())
+	slog.Debug("openai "+scenario+" response", "model", resp.Model, "elapsed_ms", time.Since(startedAt).Milliseconds())
 	return &CompleteTextResp{
 		Content: content, Model: resp.Model,
 		PromptTokens: int(resp.Usage.PromptTokens), CompletionTokens: int(resp.Usage.CompletionTokens),
@@ -241,6 +264,7 @@ func normalizeConfig(cfg config.AIConfig) config.AIConfig {
 	cfg.Model = strings.TrimSpace(cfg.Model)
 	cfg.TextModel = strings.TrimSpace(cfg.TextModel)
 	cfg.VisionModel = strings.TrimSpace(cfg.VisionModel)
+	cfg.OCRModel = strings.TrimSpace(cfg.OCRModel)
 	if cfg.TextModel == "" {
 		cfg.TextModel = cfg.Model
 	}

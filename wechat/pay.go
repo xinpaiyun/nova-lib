@@ -14,6 +14,7 @@ import (
 	"github.com/wechatpay-apiv3/wechatpay-go/core/option"
 	"github.com/wechatpay-apiv3/wechatpay-go/services/payments"
 	"github.com/wechatpay-apiv3/wechatpay-go/services/payments/jsapi"
+	"github.com/wechatpay-apiv3/wechatpay-go/services/payments/native"
 	"github.com/wechatpay-apiv3/wechatpay-go/services/refunddomestic"
 	"github.com/wechatpay-apiv3/wechatpay-go/utils"
 
@@ -217,6 +218,45 @@ func (c *PayClient) PrepayMiniProgram(ctx context.Context, req MiniProgramPrepay
 		SignType:  stringValue(resp.SignType),
 		PaySign:   stringValue(resp.PaySign),
 	}, nil
+}
+
+// NativePrepayRequest 定义 Native 扫码支付预下单参数。
+type NativePrepayRequest struct {
+	Description string
+	OutTradeNo  string
+	NotifyURL   string
+	AmountCents int64
+}
+
+// NativePrepayResponse 定义 Native 扫码支付下单结果。
+type NativePrepayResponse struct {
+	CodeURL string `json:"codeUrl"`
+}
+
+// PrepayNative 创建微信支付 Native 扫码预下单并返回二维码链接。
+func (c *PayClient) PrepayNative(ctx context.Context, req NativePrepayRequest) (*NativePrepayResponse, error) {
+	if !c.Enabled() {
+		return nil, errors.New("微信支付未配置完成")
+	}
+	notifyURL := strings.TrimSpace(req.NotifyURL)
+	if notifyURL == "" {
+		notifyURL = strings.TrimSpace(c.cfg.NotifyURL)
+	}
+	resp, _, err := (&native.NativeApiService{Client: c.client}).Prepay(ctx, native.PrepayRequest{
+		Appid:       core.String(strings.TrimSpace(c.cfg.AppID)),
+		Mchid:       core.String(strings.TrimSpace(c.cfg.MchID)),
+		Description: core.String(strings.TrimSpace(req.Description)),
+		OutTradeNo:  core.String(strings.TrimSpace(req.OutTradeNo)),
+		NotifyUrl:   core.String(notifyURL),
+		Amount: &native.Amount{
+			Currency: core.String("CNY"),
+			Total:    core.Int64(req.AmountCents),
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &NativePrepayResponse{CodeURL: stringValue(resp.CodeUrl)}, nil
 }
 
 // QueryOrderByOutTradeNo 根据商户订单号查询微信支付结果。

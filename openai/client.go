@@ -15,6 +15,7 @@ import (
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/shared"
 
+	"github.com/xinpaiyun/nova-lib/aiobs"
 	"github.com/xinpaiyun/nova-lib/config"
 )
 
@@ -36,6 +37,8 @@ type CompleteTextReq struct {
 	Model        string
 	Temperature  *float64
 	MaxTokens    int64
+	// Scenario 业务场景标识，用于调用记录（ai_call_record）与指标区分，如 learning_plan_draft。
+	Scenario string
 }
 
 // CompleteVisionReq 描述一次视觉理解请求。
@@ -47,6 +50,8 @@ type CompleteVisionReq struct {
 	Model        string
 	Temperature  *float64
 	MaxTokens    int64
+	// Scenario 业务场景标识，用于调用记录（ai_call_record）与指标区分，如 mistake_photo_ocr。
+	Scenario string
 }
 
 // CompleteTextResp 描述文本或视觉模型响应。
@@ -146,19 +151,26 @@ func (c *Client) CompleteText(ctx context.Context, req CompleteTextReq) (*Comple
 	slog.Debug("openai text request", "model", model, "max_tokens", req.MaxTokens, "temperature", req.Temperature)
 	resp, err := c.client.Chat.Completions.New(ctx, params)
 	if err != nil {
-		slog.Error("openai text request failed", "model", model, "elapsed_ms", time.Since(startedAt).Milliseconds(), "error", err.Error())
+		aiobs.Observe(aiobs.Record{Scenario: req.Scenario, Kind: aiobs.KindText, Model: model,
+			Outcome: aiobs.OutcomeFailed, Error: err.Error(), ElapsedMs: time.Since(startedAt).Milliseconds(), StartedAt: startedAt})
 		return nil, err
 	}
 	if len(resp.Choices) == 0 {
-		slog.Warn("openai text response empty", "model", model, "elapsed_ms", time.Since(startedAt).Milliseconds())
+		aiobs.Observe(aiobs.Record{Scenario: req.Scenario, Kind: aiobs.KindText, Model: model,
+			Outcome: aiobs.OutcomeEmpty, ElapsedMs: time.Since(startedAt).Milliseconds(), StartedAt: startedAt})
 		return nil, errors.New("OpenAI 响应为空")
 	}
 	content := resp.Choices[0].Message.Content
-	slog.Debug("openai text response", "model", resp.Model, "elapsed_ms", time.Since(startedAt).Milliseconds())
+	usage := aiobs.Record{Scenario: req.Scenario, Kind: aiobs.KindText, Model: resp.Model,
+		Outcome: aiobs.OutcomeSuccess, ElapsedMs: time.Since(startedAt).Milliseconds(), StartedAt: startedAt,
+		PromptTokens: int(resp.Usage.PromptTokens), CompletionTokens: int(resp.Usage.CompletionTokens),
+		TotalTokens: int(resp.Usage.TotalTokens)}
+	aiobs.Observe(usage)
+	slog.Debug("openai text response", "model", resp.Model, "elapsed_ms", usage.ElapsedMs)
 	return &CompleteTextResp{
 		Content: content, Model: resp.Model,
-		PromptTokens: int(resp.Usage.PromptTokens), CompletionTokens: int(resp.Usage.CompletionTokens),
-		TotalTokens: int(resp.Usage.TotalTokens),
+		PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens,
+		TotalTokens: usage.TotalTokens,
 	}, nil
 }
 
@@ -224,19 +236,26 @@ func (c *Client) completeImage(ctx context.Context, req CompleteVisionReq, defau
 	slog.Debug("openai "+scenario+" request", "model", model, "image", summarizeImageURL(imageURL), "image_detail", detail, "max_tokens", req.MaxTokens, "temperature", req.Temperature)
 	resp, err := c.client.Chat.Completions.New(ctx, params)
 	if err != nil {
-		slog.Error("openai "+scenario+" request failed", "model", model, "elapsed_ms", time.Since(startedAt).Milliseconds(), "error", err.Error())
+		aiobs.Observe(aiobs.Record{Scenario: req.Scenario, Kind: scenario, Model: model,
+			Outcome: aiobs.OutcomeFailed, Error: err.Error(), ElapsedMs: time.Since(startedAt).Milliseconds(), StartedAt: startedAt})
 		return nil, err
 	}
 	if len(resp.Choices) == 0 {
-		slog.Warn("openai "+scenario+" response empty", "model", model, "elapsed_ms", time.Since(startedAt).Milliseconds())
+		aiobs.Observe(aiobs.Record{Scenario: req.Scenario, Kind: scenario, Model: model,
+			Outcome: aiobs.OutcomeEmpty, ElapsedMs: time.Since(startedAt).Milliseconds(), StartedAt: startedAt})
 		return nil, errors.New("OpenAI 响应为空")
 	}
 	content := resp.Choices[0].Message.Content
-	slog.Debug("openai "+scenario+" response", "model", resp.Model, "elapsed_ms", time.Since(startedAt).Milliseconds())
+	usage := aiobs.Record{Scenario: req.Scenario, Kind: scenario, Model: resp.Model,
+		Outcome: aiobs.OutcomeSuccess, ElapsedMs: time.Since(startedAt).Milliseconds(), StartedAt: startedAt,
+		PromptTokens: int(resp.Usage.PromptTokens), CompletionTokens: int(resp.Usage.CompletionTokens),
+		TotalTokens: int(resp.Usage.TotalTokens)}
+	aiobs.Observe(usage)
+	slog.Debug("openai "+scenario+" response", "model", resp.Model, "elapsed_ms", usage.ElapsedMs)
 	return &CompleteTextResp{
 		Content: content, Model: resp.Model,
-		PromptTokens: int(resp.Usage.PromptTokens), CompletionTokens: int(resp.Usage.CompletionTokens),
-		TotalTokens: int(resp.Usage.TotalTokens),
+		PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens,
+		TotalTokens: usage.TotalTokens,
 	}, nil
 }
 

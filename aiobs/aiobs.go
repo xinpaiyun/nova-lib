@@ -40,6 +40,9 @@ type Record struct {
 	PromptTokens     int       // 输入 token
 	CompletionTokens int       // 输出 token
 	TotalTokens      int       // 总 token
+	Cost             float64   // 成本金额（按价格目录计算，币种见 Currency；调用方可显式赋值覆盖）
+	Currency         string    // 成本币种：USD/CNY，随命中价格目录而定
+	Priced           bool      // 是否命中价格目录完成计费
 	StartedAt        time.Time // 调用开始时间
 }
 
@@ -81,7 +84,7 @@ func Register(observer Observer) {
 	extra = append(extra, observer)
 }
 
-// Observe 分发一条记录：累计进程内指标 → 内置日志 → 附加观察者。
+// Observe 分发一条记录：补齐计费字段 → 累计进程内指标 → 内置日志 → 附加观察者。
 // 空字段做归一化（Outcome/Scenario 缺省），观察者 panic 被隔离。
 func Observe(record Record) {
 	if record.Outcome == "" {
@@ -90,6 +93,7 @@ func Observe(record Record) {
 	if record.Scenario == "" {
 		record.Scenario = "unspecified"
 	}
+	applyPricing(&record)
 	accumulate(record)
 	logRecord(record)
 	mu.RLock()
@@ -127,6 +131,9 @@ func logRecord(record Record) {
 		"scenario", record.Scenario, "kind", record.Kind, "model", record.Model,
 		"outcome", record.Outcome, "elapsed_ms", record.ElapsedMs,
 		"prompt_tokens", record.PromptTokens, "completion_tokens", record.CompletionTokens,
+	}
+	if record.Priced {
+		attrs = append(attrs, "cost", record.Cost, "currency", record.Currency)
 	}
 	if record.Outcome == OutcomeSuccess {
 		slog.Info("ai_call_record", attrs...)

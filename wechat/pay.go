@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/wechatpay-apiv3/wechatpay-go/core"
 	"github.com/wechatpay-apiv3/wechatpay-go/core/auth/verifiers"
@@ -226,6 +227,8 @@ type NativePrepayRequest struct {
 	OutTradeNo  string
 	NotifyURL   string
 	AmountCents int64
+	// TimeExpire 订单过期时间（RFC3339 格式），超时后微信侧自动关闭订单。
+	TimeExpire string
 }
 
 // NativePrepayResponse 定义 Native 扫码支付下单结果。
@@ -242,7 +245,7 @@ func (c *PayClient) PrepayNative(ctx context.Context, req NativePrepayRequest) (
 	if notifyURL == "" {
 		notifyURL = strings.TrimSpace(c.cfg.NotifyURL)
 	}
-	resp, _, err := (&native.NativeApiService{Client: c.client}).Prepay(ctx, native.PrepayRequest{
+	prepayRequest := native.PrepayRequest{
 		Appid:       core.String(strings.TrimSpace(c.cfg.AppID)),
 		Mchid:       core.String(strings.TrimSpace(c.cfg.MchID)),
 		Description: core.String(strings.TrimSpace(req.Description)),
@@ -252,7 +255,15 @@ func (c *PayClient) PrepayNative(ctx context.Context, req NativePrepayRequest) (
 			Currency: core.String("CNY"),
 			Total:    core.Int64(req.AmountCents),
 		},
-	})
+	}
+	if timeExpire := strings.TrimSpace(req.TimeExpire); timeExpire != "" {
+		expiredAt, err := time.Parse(time.RFC3339, timeExpire)
+		if err != nil {
+			return nil, fmt.Errorf("解析订单过期时间失败: %w", err)
+		}
+		prepayRequest.TimeExpire = core.Time(expiredAt)
+	}
+	resp, _, err := (&native.NativeApiService{Client: c.client}).Prepay(ctx, prepayRequest)
 	if err != nil {
 		return nil, err
 	}

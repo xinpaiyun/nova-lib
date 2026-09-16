@@ -150,6 +150,15 @@ func (e *Executor) Sync(ctx context.Context, limit int) {
 	}
 }
 
+// platformMchOf 返回分账接收方（平台商户号）：优先构造参数，未配置时惰性读取
+// 平台层（tenant_id=0）微信支付配置中的商户号，支持 admin 后配即生效。
+func (e *Executor) platformMchOf(ctx context.Context) string {
+	if e.platformMch != "" {
+		return e.platformMch
+	}
+	return e.resolver.MerchantMchID(ctx, 0)
+}
+
 // ReturnForRefund 订单退款前的分账回退入口（宿主退款逻辑调用）。
 // 返回 (已回退, error)：已分账成功的订单先回退抽成再退款；未分账直接放行。
 func (e *Executor) ReturnForRefund(ctx context.Context, orderNo string) (bool, error) {
@@ -176,7 +185,7 @@ func (e *Executor) ReturnForRefund(ctx context.Context, orderNo string) (bool, e
 			return false, nil
 		}
 	}
-	if e.platformMch == "" {
+	if e.platformMchOf(ctx) == "" {
 		return true, ErrPlatformMchMissed
 	}
 	client, err := e.resolver.Resolve(ctx, ps.TenantID)
@@ -187,7 +196,7 @@ func (e *Executor) ReturnForRefund(ctx context.Context, orderNo string) (bool, e
 		OrderID:     ps.WxOrderID,
 		OutOrderNo:  ps.OutOrderNo,
 		OutReturnNo: psOutReturnNo(ps.OrderNo),
-		ReturnMchID: e.platformMch,
+		ReturnMchID: e.platformMchOf(ctx),
 		AmountCents: ps.CommissionCent,
 		Description: "订单退款分账回退",
 	})
@@ -236,7 +245,8 @@ func (e *Executor) queryAndUpdate(ctx context.Context, ps *ProfitSharingOrder) {
 
 // launch 以收款商户身份发起分账（先确保平台商户号在接收方列表）。
 func (e *Executor) launch(ctx context.Context, ps *ProfitSharingOrder) (ProfitSharingOrder, error) {
-	if e.platformMch == "" {
+	platformMch := e.platformMchOf(ctx)
+	if platformMch == "" {
 		return *ps, ErrPlatformMchMissed
 	}
 	// 仅商户层收款可分账：租户必须配置了自己的商户号。
@@ -253,7 +263,7 @@ func (e *Executor) launch(ctx context.Context, ps *ProfitSharingOrder) (ProfitSh
 	order, err := client.CreateProfitSharingOrder(ctx, wechat.ProfitSharingOrderRequest{
 		TransactionID:   ps.TransactionID,
 		OutOrderNo:      ps.OutOrderNo,
-		ReceiverMchID:   e.platformMch,
+		ReceiverMchID:   platformMch,
 		AmountCents:     ps.CommissionCent,
 		Description:     psDescription,
 		UnfreezeUnsplit: true,

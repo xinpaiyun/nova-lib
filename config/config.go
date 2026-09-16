@@ -190,6 +190,8 @@ type AlipayConfig struct {
 	EncryptKey     string `yaml:"encrypt_key"`
 	GatewayURL     string `yaml:"gateway_url"`
 	NotifyURL      string `yaml:"notify_url"`
+	// ReturnURL 为电脑网站支付（alipay.trade.page.pay）完成后浏览器回跳地址。
+	ReturnURL string `yaml:"return_url"`
 }
 
 // TencentMapConfig 定义腾讯位置服务 WebService API 配置。

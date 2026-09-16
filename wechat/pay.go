@@ -37,6 +37,9 @@ type MiniProgramPrepayRequest struct {
 	NotifyURL   string
 	AmountCents int64
 	OpenID      string
+	// ProfitSharing 标记该订单是否为分账订单（settle_info.profit_sharing=true）。
+	// 仅在使用商户自己的商户号收款、且需要平台抽成分账时置为 true。
+	ProfitSharing bool
 }
 
 // MiniProgramPrepayResponse 定义小程序拉起支付参数。
@@ -195,7 +198,7 @@ func (c *PayClient) PrepayMiniProgram(ctx context.Context, req MiniProgramPrepay
 	if notifyURL == "" {
 		notifyURL = strings.TrimSpace(c.cfg.NotifyURL)
 	}
-	resp, _, err := (&jsapi.JsapiApiService{Client: c.client}).PrepayWithRequestPayment(ctx, jsapi.PrepayRequest{
+	prepayRequest := jsapi.PrepayRequest{
 		Appid:       core.String(strings.TrimSpace(c.cfg.AppID)),
 		Mchid:       core.String(strings.TrimSpace(c.cfg.MchID)),
 		Description: core.String(strings.TrimSpace(req.Description)),
@@ -206,7 +209,11 @@ func (c *PayClient) PrepayMiniProgram(ctx context.Context, req MiniProgramPrepay
 			Total:    core.Int64(req.AmountCents),
 		},
 		Payer: &jsapi.Payer{Openid: core.String(strings.TrimSpace(req.OpenID))},
-	})
+	}
+	if req.ProfitSharing {
+		prepayRequest.SettleInfo = &jsapi.SettleInfo{ProfitSharing: core.Bool(true)}
+	}
+	resp, _, err := (&jsapi.JsapiApiService{Client: c.client}).PrepayWithRequestPayment(ctx, prepayRequest)
 	if err != nil {
 		return nil, err
 	}

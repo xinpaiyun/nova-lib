@@ -12,8 +12,8 @@ import (
 
 var client *redis.Client
 
-// Init 初始化全局 Redis 客户端并验证连接。配置了 Redis（addr 非空）时由 bootstrap 调用；
-// 未配置 Redis 的 dev 模式应改调 cache.InitLocal 启用 Redka 本地缓存。
+// Init 初始化全局 Redis 客户端并验证连接。一般应改调 cache.Init：它按 addr
+// 二选一（非空走本函数，为空回退 Redka 本地缓存），与 database 的驱动解析规则对齐。
 func Init(cfg config.RedisConfig) error {
 	created, err := NewClient(cfg)
 	if err != nil {

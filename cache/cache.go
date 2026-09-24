@@ -1,13 +1,13 @@
-// Package cache 提供 Redis 缓存读写。
+// Package cache 提供统一缓存后端：Redis 或 Redka 本地持久化缓存。
 //
-// 后端由 bootstrap 按配置二选一初始化，本包不做选择、不设进程内存兜底：
-//   - 配置了 Redis：调用 nova-lib/redis 的 Init 初始化全局单例，读写走 Redis；
-//   - 未配置 Redis（dev 模式）：调用 InitLocal 启用 Redka 本地持久化缓存，
+// 统一入口 Init 按 redis.addr 二选一（与 database 的驱动解析规则对齐，
+// 不按运行模式区分，由配置决定）：
+//   - redis.addr 非空：连接 Redis（nova-lib/redis 全局单例），读写走 Redis；
+//   - redis.addr 为空：启用 InitLocal 启用 Redka 本地持久化缓存，
 //     数据落 SQLite，进程重启不丢。
 //
-// 两者都未初始化时所有读写返回 ErrUnavailable（fail fast，无静默降级）：
-// 缓存后端缺失属于配置遗漏，必须在启动与调用路径上显式暴露，而不是用
-// 进程内存悄悄兜底（数据不跨进程、重启即失）。
+// 初始化失败返回错误（fail fast，无静默降级）：缓存后端缺失属于配置或
+// 环境问题，必须在启动路径上显式暴露，而不是用进程内存悄悄兜底。
 package cache
 
 import (
@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,11 +27,26 @@ import (
 	"github.com/nalgeon/redka"
 	goredis "github.com/redis/go-redis/v9"
 
+	"github.com/xinpaiyun/nova-lib/config"
 	"github.com/xinpaiyun/nova-lib/logging"
 	"github.com/xinpaiyun/nova-lib/redis"
 )
 
 var localDB *redka.DB
+
+// Init 统一初始化缓存后端：redis.addr 非空连接 Redis（全局单例，cache/限流/
+// 会话共享）；为空回退 Redka 本地持久化缓存（SQLite），localPath 为空时默认
+// data/redka-cache.db。与 database 的驱动解析规则对齐，不按运行模式区分。
+// 初始化失败返回错误，由调用方决定终止还是降级。
+func Init(cfg config.RedisConfig, localPath string) error {
+	if strings.TrimSpace(cfg.Addr) != "" {
+		return redis.Init(cfg)
+	}
+	if strings.TrimSpace(localPath) == "" {
+		localPath = "data/redka-cache.db"
+	}
+	return InitLocal(localPath)
+}
 
 // listUnavailableWarnOnce 保证 List 操作后端缺失告警只输出一次。
 var listUnavailableWarnOnce sync.Once

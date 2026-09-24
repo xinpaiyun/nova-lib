@@ -7,8 +7,28 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xinpaiyun/nova-lib/config"
 	goredis "github.com/redis/go-redis/v9"
 )
+
+// TestInitFallsBackToLocalRedka 验证统一入口：addr 为空时回退 Redka 本地缓存。
+func TestInitFallsBackToLocalRedka(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cache.db")
+	if err := Init(config.RedisConfig{}, path); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	t.Cleanup(func() { _ = CloseLocal() })
+	if !BackendReady() {
+		t.Fatal("BackendReady() = false, want true after fallback Init")
+	}
+	ctx := context.Background()
+	if err := Set(ctx, "cache:init:fallback", "v1", time.Minute); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+	if got, err := Get(ctx, "cache:init:fallback"); err != nil || got != "v1" {
+		t.Fatalf("Get() = (%q, %v), want (v1, nil)", got, err)
+	}
+}
 
 // TestRedkaKVBackend 验证 Redka 本地缓存作为 KV 后端时的读写回环与 miss 归一化。
 func TestRedkaKVBackend(t *testing.T) {
@@ -16,7 +36,6 @@ func TestRedkaKVBackend(t *testing.T) {
 		t.Fatalf("InitLocal() error = %v", err)
 	}
 	t.Cleanup(func() { _ = CloseLocal() })
-
 	ctx := context.Background()
 	if err := Set(ctx, "cache:redka:kv", "v1", time.Minute); err != nil {
 		t.Fatalf("Set() error = %v", err)

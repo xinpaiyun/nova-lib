@@ -13,6 +13,7 @@ import (
 
 // DatabaseConfig 定义 GORM 数据库连接配置。
 type DatabaseConfig struct {
+	// Deprecated: 驱动不再由此字段决定；host 与 name 均非空时使用 MySQL，否则回退本地 SQLite。
 	Driver                 string `yaml:"driver"`
 	Host                   string `yaml:"host"`
 	Port                   int    `yaml:"port"`

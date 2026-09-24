@@ -33,3 +33,19 @@ func TestInitAppliesPoolConfig(t *testing.T) {
 		t.Fatalf("MaxOpenConnections = %d, want %d", got, cfg.MaxOpenConns)
 	}
 }
+
+// TestResolveDriver 验证统一驱动解析规则：host 与 name 均非空时使用 MySQL，否则回退 SQLite。
+func TestResolveDriver(t *testing.T) {
+	mysqlCfg := config.DatabaseConfig{Host: "127.0.0.1", Name: "nova"}
+	if got := ResolveDriver(mysqlCfg); got != "mysql" {
+		t.Fatalf("ResolveDriver() = %q, want mysql", got)
+	}
+	sqliteCfg := config.DatabaseConfig{Host: "127.0.0.1", Name: ""}
+	if got := ResolveDriver(sqliteCfg); got != "sqlite" {
+		t.Fatalf("ResolveDriver() = %q, want sqlite when name empty", got)
+	}
+	zeroCfg := config.DatabaseConfig{}
+	if got := ResolveDriver(zeroCfg); got != "sqlite" {
+		t.Fatalf("ResolveDriver() = %q, want sqlite for zero config", got)
+	}
+}

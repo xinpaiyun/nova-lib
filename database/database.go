@@ -2,9 +2,9 @@
 package database
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/glebarez/sqlite"
@@ -18,11 +18,13 @@ import (
 var db *gorm.DB
 
 // Init 根据配置初始化 GORM 数据库连接。
+// 驱动由统一规则解析：host 与 name 均非空时使用 MySQL，否则回退本地 SQLite。
 func Init(cfg config.DatabaseConfig) error {
 	dialector, err := buildDialector(cfg)
 	if err != nil {
 		return err
 	}
+	logging.Info("database driver resolved", "driver", ResolveDriver(cfg))
 	conn, err := gorm.Open(dialector, &gorm.Config{
 		SkipDefaultTransaction:                   true,
 		Logger:                                   logging.NewGormLogger(),
@@ -67,19 +69,28 @@ func applyPoolConfig(sqlDB interface {
 	sqlDB.SetConnMaxLifetime(time.Duration(lifetimeMinutes) * time.Minute)
 }
 
-// buildDialector 根据驱动类型创建 GORM 方言。
-func buildDialector(cfg config.DatabaseConfig) (gorm.Dialector, error) {
-	switch cfg.Driver {
-	case "mysql":
-		return mysql.Open(cfg.DSN()), nil
-	case "sqlite":
-		if err := os.MkdirAll(filepath.Dir(cfg.SQLitePath), 0o755); err != nil {
-			return nil, err
-		}
-		return sqlite.Open(cfg.SQLitePath), nil
-	default:
-		return nil, fmt.Errorf("unsupported database driver: %s", cfg.Driver)
+// ResolveDriver 按统一规则解析数据库驱动：host 与 name 均非空时使用 MySQL，
+// 否则回退本地 SQLite。不再依赖显式 driver 配置字段。
+func ResolveDriver(cfg config.DatabaseConfig) string {
+	if strings.TrimSpace(cfg.Host) != "" && strings.TrimSpace(cfg.Name) != "" {
+		return "mysql"
 	}
+	return "sqlite"
+}
+
+// buildDialector 按统一解析规则创建 GORM 方言。
+func buildDialector(cfg config.DatabaseConfig) (gorm.Dialector, error) {
+	if ResolveDriver(cfg) == "mysql" {
+		return mysql.Open(cfg.DSN()), nil
+	}
+	path := strings.TrimSpace(cfg.SQLitePath)
+	if path == "" {
+		path = "data/app.db"
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	return sqlite.Open(path), nil
 }
 
 // DB 返回已初始化的 GORM 数据库连接。

@@ -9,12 +9,13 @@ import (
 	"github.com/xinpaiyun/nova-lib/apperror"
 )
 
-// Body 定义统一 API 响应结构。
+// Body 定义统一 API 响应结构。data 始终序列化（空数据输出 "data":null），
+// 保证调用方 "'data' in body" 的解包判断在无数据成功响应下依然成立。
 type Body struct {
 	Code      int    `json:"code"`
 	ErrorCode string `json:"errorCode,omitempty"`
 	Message   string `json:"message"`
-	Data      any    `json:"data,omitempty"`
+	Data      any    `json:"data"`
 	RequestID string `json:"requestId,omitempty"`
 }
 

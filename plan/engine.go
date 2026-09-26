@@ -236,6 +236,50 @@ func (e *engine) Assign(ctx context.Context, tenantID, planID, operatorID uint64
 	return e.Subscription(ctx, tenantID)
 }
 
+// AssignWithExpiry 管理端带到期时间开通/续费：同套餐且当前未到期（含永久）
+// 保持原 StartedAt，换套餐/无订阅/已到期则从当前时间起算；expireAt 零值 = 永久有效。
+func (e *engine) AssignWithExpiry(ctx context.Context, tenantID, planID, operatorID uint64, expireAt time.Time) (Subscription, error) {
+	if tenantID == 0 || planID == 0 {
+		return Subscription{}, ErrInvalidOrder
+	}
+	_ = operatorID
+	err := e.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var row PlanModel
+		if err := tx.Take(&row, "id = ?", planID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrPlanNotFound
+			}
+			return err
+		}
+		if row.Status != 1 {
+			return ErrPlanDisabled
+		}
+		now := time.Now()
+		var sub PlanSubscription
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Take(&sub, "tenant_id = ?", tenantID).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		startedAt := now
+		if err == nil && sub.PlanID == planID && (sub.ExpireAt.IsZero() || sub.ExpireAt.After(now)) {
+			startedAt = sub.StartedAt
+		}
+		return upsertSubscriptionTx(tx, tenantID, row, startedAt, expireAt)
+	})
+	if err != nil {
+		return Subscription{}, err
+	}
+	return e.Subscription(ctx, tenantID)
+}
+
+// Revoke 撤销主体订阅（删除订阅行，幂等）。
+func (e *engine) Revoke(ctx context.Context, tenantID uint64) error {
+	if tenantID == 0 {
+		return ErrInvalidOrder
+	}
+	return e.db.WithContext(ctx).Where("tenant_id = ?", tenantID).Delete(&PlanSubscription{}).Error
+}
+
 // Subscription 查询当前生效订阅。
 func (e *engine) Subscription(ctx context.Context, tenantID uint64) (Subscription, error) {
 	var row PlanSubscription

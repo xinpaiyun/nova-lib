@@ -213,6 +213,13 @@ type Engine interface {
 	// ── 订阅 ──
 	// Assign 管理端直接开通套餐（永久有效，免费版/人工开通）。
 	Assign(ctx context.Context, tenantID, planID, operatorID uint64) (Subscription, error)
+	// AssignWithExpiry 管理端带到期时间开通/续费（手动开通，到期回落由项目侧处理）：
+	// 同套餐且当前未到期（含永久）则保持原 StartedAt，换套餐/无订阅/已到期则从当前时间起算；
+	// expireAt 零值表示永久有效。到期时点的顺延计算由调用方完成。
+	AssignWithExpiry(ctx context.Context, tenantID, planID, operatorID uint64, expireAt time.Time) (Subscription, error)
+	// Revoke 撤销主体订阅（删除订阅行，幂等；未开通时同样成功）。
+	// 项目侧据此实现"取消订阅后回落免费版"语义。
+	Revoke(ctx context.Context, tenantID uint64) error
 	// Subscription 查询当前生效订阅；未开通返回 ErrSubscriptionMiss。
 	Subscription(ctx context.Context, tenantID uint64) (Subscription, error)
 

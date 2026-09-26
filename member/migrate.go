@@ -14,19 +14,17 @@ func DropLegacyTables(db *gorm.DB) error {
 }
 
 // DropTablesIfColumnsExist 删除含任一特征列的表。表名来自 lib 内常量，无注入风险。
+// 经 gorm Migrator 探测，兼容 MySQL 与 sqlite（information_schema 为 MySQL 专有，
+// sqlite 下直接报错会中断项目启动迁移）。
 func DropTablesIfColumnsExist(db *gorm.DB, specs map[string][]string) error {
+	migrator := db.Migrator()
 	for table, columns := range specs {
+		if !migrator.HasTable(table) {
+			continue
+		}
 		for _, col := range columns {
-			var count int64
-			if err := db.Raw(
-				"SELECT COUNT(*) FROM information_schema.COLUMNS "+
-					"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?",
-				table, col,
-			).Scan(&count).Error; err != nil {
-				return err
-			}
-			if count > 0 {
-				if err := db.Exec("DROP TABLE IF EXISTS " + table).Error; err != nil {
+			if migrator.HasColumn(table, col) {
+				if err := migrator.DropTable(table); err != nil {
 					return err
 				}
 				break

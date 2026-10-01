@@ -20,6 +20,8 @@ const (
 	KindText   = "text"   // 纯文本补全
 	KindVision = "vision" // 图片理解
 	KindOCR    = "ocr"    // 图片文字识别
+	KindASR    = "asr"    // 语音转文字
+	KindTTS    = "tts"    // 文字转语音
 )
 
 // 调用结果。

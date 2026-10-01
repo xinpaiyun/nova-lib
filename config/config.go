@@ -178,7 +178,13 @@ type AIConfig struct {
 	TextModel   string `yaml:"text_model"`
 	VisionModel string `yaml:"vision_model"`
 	OCRModel    string `yaml:"ocr_model"`
-	TimeoutSec  int    `yaml:"timeout_sec"`
+	// ASRModel 语音转文字模型（/audio/transcriptions）；阿里云百炼建议 qwen3-asr-flash。
+	ASRModel string `yaml:"asr_model"`
+	// TTSModel 文字转语音模型（/audio/speech）；阿里云百炼建议 qwen-tts。
+	TTSModel string `yaml:"tts_model"`
+	// TTSVoice 文字转语音音色；未配置时使用客户端内置默认音色。
+	TTSVoice   string `yaml:"tts_voice"`
+	TimeoutSec int    `yaml:"timeout_sec"`
 }
 
 // AlipayConfig 定义支付宝小程序开放平台参数。

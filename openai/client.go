@@ -284,6 +284,9 @@ func normalizeConfig(cfg config.AIConfig) config.AIConfig {
 	cfg.TextModel = strings.TrimSpace(cfg.TextModel)
 	cfg.VisionModel = strings.TrimSpace(cfg.VisionModel)
 	cfg.OCRModel = strings.TrimSpace(cfg.OCRModel)
+	cfg.ASRModel = strings.TrimSpace(cfg.ASRModel)
+	cfg.TTSModel = strings.TrimSpace(cfg.TTSModel)
+	cfg.TTSVoice = strings.TrimSpace(cfg.TTSVoice)
 	if cfg.TextModel == "" {
 		cfg.TextModel = cfg.Model
 	}

@@ -28,14 +28,23 @@ func Resolve(path string) (string, error) {
 }
 
 // TranscodeWebMToMP4 将 WebM 转为 H.264/AAC MP4。
+// 浏览器 MediaRecorder 产出的是 VFR（可变帧率）WebM，帧间隔不均；直接喂给
+// x264 + B 帧会产生 DTS 异常帧，播放器解码到这些帧会触发内部恢复并回跳最近
+// 关键帧（x264 默认 GOP 约 8 秒且首帧即总览画面），表现为「播放隔一段跳回
+// 开头一帧」。这里用 CFR 归一化时间戳并缩小 GOP，保证输出时间轴严格单调。
 func TranscodeWebMToMP4(ctx context.Context, ffmpegPath string, inputPath string, outputPath string) error {
 	args := []string{
 		"-y",
+		"-fflags", "+genpts",
 		"-i", inputPath,
 		"-map", "0:v:0",
 		"-map", "0:a?",
 		"-c:v", "libx264",
 		"-pix_fmt", "yuv420p",
+		"-fps_mode", "cfr",
+		"-r", "30",
+		"-g", "60",
+		"-keyint_min", "30",
 		"-c:a", "aac",
 		"-b:a", "192k",
 		"-shortest",

@@ -40,6 +40,8 @@ func TranscodeWebMToMP4(ctx context.Context, ffmpegPath string, inputPath string
 		"-map", "0:v:0",
 		"-map", "0:a?",
 		"-c:v", "libx264",
+		// 1080p 下默认 preset 内存/CPU 偏高，导出容器有 1.5GiB 内存限制，用 veryfast 兜底。
+		"-preset", "veryfast",
 		"-pix_fmt", "yuv420p",
 		"-fps_mode", "cfr",
 		"-r", "30",

@@ -72,6 +72,81 @@ func TestWechatAppLookup(t *testing.T) {
 	}
 }
 
+func TestWechatConfigSaveAndDecrypt(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	const masterKey = "0123456789abcdef0123456789abcdef"
+
+	if _, err := store.GetWechatConfig(ctx, 9); err != ErrNotFound {
+		t.Fatalf("未配置应返回 ErrNotFound: %v", err)
+	}
+	saved, err := store.SaveWechatConfig(ctx, 9, WechatConfigInput{
+		AppID: "wx-tenant-9", AppSecret: "secret-9",
+		MchID: "mch-9", MchAPIV3Key: "v3key-9",
+		NotifyURL: "https://example.com/pay/notify", Enabled: true,
+	}, masterKey)
+	if err != nil {
+		t.Fatalf("保存失败: %v", err)
+	}
+	if saved.AppSecret == "secret-9" || saved.MchAPIV3Key == "v3key-9" {
+		t.Fatalf("落库应为密文: %+v", saved)
+	}
+	// 解密还原明文。
+	secrets, err := saved.Decrypt(masterKey)
+	if err != nil || secrets.AppSecret != "secret-9" || secrets.MchAPIV3Key != "v3key-9" {
+		t.Fatalf("解密结果不正确: %+v err=%v", secrets, err)
+	}
+	// 幂等更新：敏感字段留空保留旧值，其余字段生效。
+	updated, err := store.SaveWechatConfig(ctx, 9, WechatConfigInput{
+		AppID: "wx-tenant-9", NotifyURL: "https://example.com/notify2", Enabled: false,
+	}, masterKey)
+	if err != nil {
+		t.Fatalf("更新失败: %v", err)
+	}
+	if updated.ID != saved.ID || updated.Enabled || updated.NotifyURL != "https://example.com/notify2" {
+		t.Fatalf("更新应复用同一行并生效: %+v", updated)
+	}
+	secrets, err = updated.Decrypt(masterKey)
+	if err != nil || secrets.AppSecret != "secret-9" || secrets.MchAPIV3Key != "v3key-9" {
+		t.Fatalf("留空敏感字段应保留旧值: %+v err=%v", secrets, err)
+	}
+	// 提供非空敏感字段但无主密钥时应报错，禁止明文落库。
+	if _, err := store.SaveWechatConfig(ctx, 10, WechatConfigInput{AppID: "wx-tenant-10", AppSecret: "plain-10"}, ""); err != ErrInvalidMasterKey {
+		t.Fatalf("无主密钥应返回 ErrInvalidMasterKey: %v", err)
+	}
+	// 敏感字段留空且无主密钥时允许保存。
+	plain, err := store.SaveWechatConfig(ctx, 10, WechatConfigInput{AppID: "wx-tenant-10"}, "")
+	if err != nil {
+		t.Fatalf("无敏感字段保存失败: %v", err)
+	}
+	if plain.AppSecret != "" {
+		t.Fatalf("未提供敏感字段应存空: %+v", plain)
+	}
+}
+
+func TestWechatConfigLookupByAppID(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	if _, err := store.SaveWechatConfig(ctx, 5, WechatConfigInput{AppID: "wx-app-5", Enabled: true}, ""); err != nil {
+		t.Fatalf("保存失败: %v", err)
+	}
+	cfg, err := store.FindEnabledWechatConfigByAppID(ctx, "wx-app-5")
+	if err != nil || cfg.TenantID != 5 {
+		t.Fatalf("按 appid 反查失败: %+v err=%v", cfg, err)
+	}
+	if _, err := store.FindEnabledWechatConfigByAppID(ctx, "wx-missing"); err != ErrNotFound {
+		t.Fatalf("未知 appid 应返回 ErrNotFound: %v", err)
+	}
+	// 禁用后不可反查。
+	if _, err := store.SaveWechatConfig(ctx, 5, WechatConfigInput{AppID: "wx-app-5", Enabled: false}, ""); err != nil {
+		t.Fatalf("更新失败: %v", err)
+	}
+	if _, err := store.FindEnabledWechatConfigByAppID(ctx, "wx-app-5"); err != ErrNotFound {
+		t.Fatalf("禁用后应返回 ErrNotFound: %v", err)
+	}
+}
+
 func TestCommissionUpsert(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

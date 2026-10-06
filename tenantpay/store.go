@@ -17,7 +17,8 @@ type Store struct {
 
 // NewStore 创建数据访问对象，并自动迁移本包涉及的表。
 // integration_configs / tenant_wechat_apps 与宿主底座共用（AutoMigrate 只增列不删列，
-// 与宿主迁移兼容）；tenant_commissions / profit_sharing_orders 为本包自建。
+// 与宿主迁移兼容）；tenant_commissions / profit_sharing_orders / tenant_wechat_configs
+// 为本包自建。
 func NewStore(db *gorm.DB) (*Store, error) {
 	if db == nil {
 		return nil, errors.New("db 不能为空")
@@ -27,6 +28,7 @@ func NewStore(db *gorm.DB) (*Store, error) {
 		&TenantWechatApp{},
 		&TenantCommission{},
 		&ProfitSharingOrder{},
+		&TenantWechatConfig{},
 	); err != nil {
 		return nil, err
 	}
@@ -143,6 +145,76 @@ func (s *Store) FindTenantIDByAppID(ctx context.Context, appID string) (uint64, 
 		return 0, normalizeError(err)
 	}
 	return app.TenantID, nil
+}
+
+// ---------- 租户微信配置（tenant_wechat_configs） ----------
+
+// SaveWechatConfig 保存租户微信配置（tenant_id 幂等 upsert）。
+// 敏感字段（AppSecret / MchAPIV3Key）以明文入参、密文落库；留空保留旧值。
+// 提供非空敏感字段时必须传入合法 masterKey（复用 tenantpay.Encrypt 校验）。
+func (s *Store) SaveWechatConfig(ctx context.Context, tenantID uint64, in WechatConfigInput, masterKey string) (TenantWechatConfig, error) {
+	secret, err := Encrypt(masterKey, in.AppSecret)
+	if err != nil {
+		return TenantWechatConfig{}, err
+	}
+	v3Key, err := Encrypt(masterKey, in.MchAPIV3Key)
+	if err != nil {
+		return TenantWechatConfig{}, err
+	}
+	var cfg TenantWechatConfig
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("tenant_id = ?", tenantID).First(&cfg).Error; err == nil {
+			cfg.AppID = in.AppID
+			if secret != "" {
+				cfg.AppSecret = secret
+			}
+			cfg.MchID = in.MchID
+			if v3Key != "" {
+				cfg.MchAPIV3Key = v3Key
+			}
+			cfg.NotifyURL = in.NotifyURL
+			cfg.Enabled = in.Enabled
+			return tx.Save(&cfg).Error
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		cfg = TenantWechatConfig{
+			TenantID:    tenantID,
+			AppID:       in.AppID,
+			AppSecret:   secret,
+			MchID:       in.MchID,
+			MchAPIV3Key: v3Key,
+			NotifyURL:   in.NotifyURL,
+			Enabled:     in.Enabled,
+		}
+		return tx.Create(&cfg).Error
+	})
+	if err != nil {
+		return TenantWechatConfig{}, err
+	}
+	return cfg, nil
+}
+
+// GetWechatConfig 读取租户微信配置（机密字段为密文，未配置返回 ErrNotFound）。
+func (s *Store) GetWechatConfig(ctx context.Context, tenantID uint64) (TenantWechatConfig, error) {
+	var cfg TenantWechatConfig
+	if err := s.db.WithContext(ctx).
+		Where("tenant_id = ?", tenantID).
+		First(&cfg).Error; err != nil {
+		return TenantWechatConfig{}, normalizeError(err)
+	}
+	return cfg, nil
+}
+
+// FindEnabledWechatConfigByAppID 按已启用 appid 反查租户微信配置（C 端按 appid 定位经营主体场景）。
+func (s *Store) FindEnabledWechatConfigByAppID(ctx context.Context, appID string) (TenantWechatConfig, error) {
+	var cfg TenantWechatConfig
+	if err := s.db.WithContext(ctx).
+		Where("app_id = ? AND enabled = ?", appID, true).
+		First(&cfg).Error; err != nil {
+		return TenantWechatConfig{}, normalizeError(err)
+	}
+	return cfg, nil
 }
 
 // ---------- 抽成配置（tenant_commissions） ----------

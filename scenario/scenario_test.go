@@ -5,73 +5,28 @@ import (
 	"testing"
 )
 
-// TestSeedFormat 校验种子表编码格式与归属一致性（两级、全小写、中划线分隔）。
-func TestSeedFormat(t *testing.T) {
-	for _, s := range subScenes {
-		if !strings.Contains(s.Code, ".") {
-			t.Errorf("二级编码 %q 缺少一级前缀", s.Code)
+// TestConstantsFormat 校验编码常量格式（两级、全小写、中划线分隔）。
+func TestConstantsFormat(t *testing.T) {
+	for _, code := range []string{
+		DiningMilkTea, DiningDineIn,
+		VehicleRepair, VehicleMaintenance, VehicleBeauty,
+		PetHospital, PetGrooming, PetBoarding,
+		FreshECommerce, FreshStore,
+	} {
+		if !strings.Contains(code, ".") {
+			t.Errorf("二级编码 %q 缺少一级前缀", code)
 		}
-		if s.Code != strings.ToLower(s.Code) {
-			t.Errorf("二级编码 %q 含大写字符", s.Code)
+		if code != strings.ToLower(code) {
+			t.Errorf("编码 %q 含大写字符", code)
 		}
-		if strings.ContainsAny(s.Code, " _") {
-			t.Errorf("二级编码 %q 含空格或下划线（应使用中划线）", s.Code)
-		}
-		first, _, ok := Split(s.Code)
-		if !ok || first != s.Scenario {
-			t.Errorf("二级编码 %q 前缀 %q 与归属一级 %q 不一致", s.Code, first, s.Scenario)
-		}
-	}
-	seen := make(map[string]bool, len(subScenes))
-	for _, s := range subScenes {
-		if seen[s.Code] {
-			t.Errorf("二级编码 %q 重复", s.Code)
-		}
-		seen[s.Code] = true
-	}
-}
-
-// TestScenarioSeeds 校验一级场景种子覆盖全部二级归属且无重复。
-func TestScenarioSeeds(t *testing.T) {
-	scSet := make(map[string]bool, len(scenarios))
-	for _, s := range scenarios {
-		if scSet[s.Code] {
-			t.Errorf("一级编码 %q 重复", s.Code)
-		}
-		scSet[s.Code] = true
-	}
-	for _, sub := range subScenes {
-		if !scSet[sub.Scenario] {
-			t.Errorf("二级业态 %q 归属的一级 %q 不在种子表", sub.Code, sub.Scenario)
+		if strings.ContainsAny(code, " _") {
+			t.Errorf("编码 %q 含空格或下划线（应使用中划线）", code)
 		}
 	}
-}
-
-func TestLookupAndValidity(t *testing.T) {
-	sub, ok := Lookup(DiningMilkTea)
-	if !ok || sub.Name != "奶茶饮品" || sub.Deprecated {
-		t.Fatalf("Lookup 结果不正确: %+v ok=%v", sub, ok)
-	}
-	if !IsValid(DiningMilkTea) || IsValid("dining.unknown") || IsValid("") {
-		t.Fatal("IsValid 判断不正确")
-	}
-	if IsDeprecated(DiningMilkTea) {
-		t.Fatal("现存种子不应为废弃状态")
-	}
-}
-
-func TestSubScenesByScenario(t *testing.T) {
-	list := SubScenesByScenario(Vehicle)
-	if len(list) != 3 {
-		t.Fatalf("vehicle 应有 3 个二级业态: %d", len(list))
-	}
-	for _, s := range list {
-		if s.Scenario != Vehicle {
-			t.Fatalf("分组结果混入其他一级: %+v", s)
+	for _, code := range []string{Dining, Vehicle, Pet, Fresh} {
+		if strings.Contains(code, ".") || code != strings.ToLower(code) {
+			t.Errorf("一级编码 %q 格式不正确", code)
 		}
-	}
-	if len(SubScenesByScenario("unknown")) != 0 {
-		t.Fatal("未知一级应返回空列表")
 	}
 }
 

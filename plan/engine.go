@@ -331,7 +331,9 @@ func (e *engine) CreatePurchase(ctx context.Context, in PurchaseInput) (Purchase
 		Status:       PurchasePending,
 		OperatorID:   in.OperatorID,
 	}
-	if err := e.db.WithContext(ctx).Create(&record).Error; err != nil {
+	// 待支付单订阅周期列（started_at/expire_at）为零值：Omit 后落 NULL，
+	// 避免 MySQL 严格模式拒绝 0000-00-00；支付成功时再回填真实周期。
+	if err := e.db.WithContext(ctx).Omit("started_at", "expire_at").Create(&record).Error; err != nil {
 		return Purchase{}, err
 	}
 	return purchaseOf(record), nil
@@ -416,7 +418,7 @@ func (e *engine) MarkPurchasePaid(ctx context.Context, outTradeNo, transactionID
 			"transaction_id": strings.TrimSpace(transactionID),
 			"pay_time":       payTime,
 			"started_at":     startedAt,
-			"expire_at":      expireAt,
+			"expire_at":      nullableTime(expireAt),
 			"status":         PurchasePaid,
 			"updated_at":     time.Now(),
 		}
@@ -578,6 +580,16 @@ func (e *engine) ConsumeMonthly(ctx context.Context, tenantID uint64, code strin
 
 // ── 内部辅助 ──
 
+// nullableTime 将零值时间转换为 nil：零值语义列（永久有效/支付前未开始）在
+// MySQL 严格模式下不能写 '0000-00-00'（Error 1292），统一落 NULL；
+// 读取时 NULL 扫描为 time.Time 零值，IsZero 判定语义不变（SQLite 同样兼容）。
+func nullableTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t
+}
+
 // nextWindowTx 计算支付成功后的订阅周期：同套餐未到期从当前到期时间顺延，否则从支付时间起算。
 func nextWindowTx(tx *gorm.DB, tenantID, planID uint64, cycle string, payTime time.Time) (time.Time, time.Time, error) {
 	if cycle != CycleMonthly && cycle != CycleYearly {
@@ -604,7 +616,7 @@ func upsertSubscriptionTx(tx *gorm.DB, tenantID uint64, planRow PlanModel, start
 	var sub PlanSubscription
 	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Take(&sub, "tenant_id = ?", tenantID).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return tx.Create(&PlanSubscription{
+		record := PlanSubscription{
 			TenantID:  tenantID,
 			PlanID:    planRow.ID,
 			PlanCode:  planRow.Code,
@@ -612,7 +624,13 @@ func upsertSubscriptionTx(tx *gorm.DB, tenantID uint64, planRow PlanModel, start
 			StartedAt: startedAt,
 			ExpireAt:  expireAt,
 			UpdatedAt: now,
-		}).Error
+		}
+		// expireAt 零值（永久有效）：Omit 后列落 NULL，避免 MySQL 拒绝 0000-00-00。
+		create := tx
+		if expireAt.IsZero() {
+			create = create.Omit("expire_at")
+		}
+		return create.Create(&record).Error
 	}
 	if err != nil {
 		return err
@@ -622,7 +640,7 @@ func upsertSubscriptionTx(tx *gorm.DB, tenantID uint64, planRow PlanModel, start
 		"plan_code":  planRow.Code,
 		"plan_name":  planRow.Name,
 		"started_at": startedAt,
-		"expire_at":  expireAt,
+		"expire_at":  nullableTime(expireAt),
 		"updated_at": now,
 	}).Error
 }

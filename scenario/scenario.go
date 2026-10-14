@@ -1,8 +1,8 @@
-// Package scenario 提供四项目共享的两级经营场景编码常量。
+// Package scenario 提供各项目共享的两级经营场景编码常量。
 // 编码规则见 nova 仓库 docs/product-architecture/saas-platform-pattern.md 第 4 节：
 // 格式 {scenario}.{sub-scene}，全小写中划线分隔；一级为经营大类（scenario_code），
 // 二级为细化业态（sub_scene_code），两个字段分开存储，允许只定一级、二级后补。
-// 各项目的场景枚举与校验由项目自行定义，本包只保证编码字面量四项目一致；
+// 各项目的场景枚举与校验由项目自行定义，本包只保证编码字面量各项目一致；
 // 新增业态编码追加常量即可，已废弃编码不复用。
 package scenario
 
@@ -10,10 +10,13 @@ import "strings"
 
 // 一级经营场景编码。
 const (
-	Dining  = "dining"  // 餐饮
-	Vehicle = "vehicle" // 车辆
-	Pet     = "pet"     // 宠物
-	Fresh   = "fresh"   // 生鲜
+	Dining    = "dining"    // 餐饮
+	Vehicle   = "vehicle"   // 车辆
+	Pet       = "pet"       // 宠物
+	Fresh     = "fresh"     // 生鲜
+	Insurance = "insurance" // 保险
+	Travel    = "travel"    // 旅游
+	Edu       = "edu"       // 教育
 )
 
 // 二级细化业态编码。
@@ -28,6 +31,12 @@ const (
 	PetBoarding        = "pet.boarding"        // 寄养
 	FreshECommerce     = "fresh.e-commerce"    // 私域电商
 	FreshStore         = "fresh.store"         // 生鲜门店
+	InsuranceTeam      = "insurance.team"      // 保险团队
+	InsuranceAgency    = "insurance.agency"    // 车险代理
+	TravelAgency       = "travel.agency"       // 旅行社
+	TravelGuide        = "travel.guide"        // 导游工作室
+	EduInstitution     = "edu.institution"     // 教育机构
+	EduExam            = "edu.exam"            // 成人备考
 )
 
 // Split 把二级编码拆成一级 + 二级尾段（如 "dining.milk-tea" → "dining", "milk-tea"）。

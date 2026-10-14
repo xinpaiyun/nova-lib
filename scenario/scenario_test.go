@@ -12,6 +12,9 @@ func TestConstantsFormat(t *testing.T) {
 		VehicleRepair, VehicleMaintenance, VehicleBeauty,
 		PetHospital, PetGrooming, PetBoarding,
 		FreshECommerce, FreshStore,
+		InsuranceTeam, InsuranceAgency,
+		TravelAgency, TravelGuide,
+		EduInstitution, EduExam,
 	} {
 		if !strings.Contains(code, ".") {
 			t.Errorf("二级编码 %q 缺少一级前缀", code)
@@ -23,7 +26,7 @@ func TestConstantsFormat(t *testing.T) {
 			t.Errorf("编码 %q 含空格或下划线（应使用中划线）", code)
 		}
 	}
-	for _, code := range []string{Dining, Vehicle, Pet, Fresh} {
+	for _, code := range []string{Dining, Vehicle, Pet, Fresh, Insurance, Travel, Edu} {
 		if strings.Contains(code, ".") || code != strings.ToLower(code) {
 			t.Errorf("一级编码 %q 格式不正确", code)
 		}

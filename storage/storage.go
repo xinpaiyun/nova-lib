@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -15,6 +16,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"github.com/xinpaiyun/nova-lib/config"
 )
@@ -301,7 +303,82 @@ func NewS3Store(cfg config.StorageConfig) (*S3Store, error) {
 		// 阿里云 OSS S3 兼容层不支持 SDK 默认的 aws-chunked 校验和上传。
 		options.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 	})
-	return &S3Store{cfg: cfg, client: client}, nil
+	store := &S3Store{cfg: cfg, client: client}
+	// 桶不存在时自动创建，公共桶创建后设置 public-read，免去手工开桶的部署步骤。
+	if err := store.ensureBucket(context.Background()); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+// ensureBucket 保障配置的桶可用：桶不存在（HeadBucket 404/403）时自动创建，
+// 公共桶（PrivateBucket=false）创建后设置 public-read ACL，已存在的桶不改 ACL。
+// 探测因网络故障等无法判定时静默跳过，保持构造阶段无强网络依赖的既有语义。
+func (s *S3Store) ensureBucket(ctx context.Context) error {
+	if !s.Enabled() {
+		return fmt.Errorf("对象存储未初始化")
+	}
+	_, err := s.client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: &s.cfg.BucketName})
+	if err == nil || !shouldCreateBucket(err) {
+		return nil
+	}
+	input := &s3.CreateBucketInput{Bucket: &s.cfg.BucketName}
+	// 非默认区域需显式声明 LocationConstraint，us-east-1 与空 region 省略。
+	if region := strings.TrimSpace(s.cfg.Region); region != "" && region != "us-east-1" {
+		input.CreateBucketConfiguration = &types.CreateBucketConfiguration{
+			LocationConstraint: types.BucketLocationConstraint(region),
+		}
+	}
+	if _, err := s.client.CreateBucket(ctx, input); err != nil {
+		if alreadyExists(err) {
+			return nil
+		}
+		return fmt.Errorf("自动创建对象存储桶 %s 失败: %v", s.cfg.BucketName, err)
+	}
+	if !s.cfg.PrivateBucket {
+		acl := types.BucketCannedACLPublicRead
+		if _, err := s.client.PutBucketAcl(ctx, &s3.PutBucketAclInput{
+			Bucket: &s.cfg.BucketName,
+			ACL:    acl,
+		}); err != nil {
+			return fmt.Errorf("设置对象存储桶 %s 公共读失败: %v", s.cfg.BucketName, err)
+		}
+	}
+	return nil
+}
+
+// shouldCreateBucket 判断桶探测错误是否值得尝试创建：
+// 404 表示桶不存在；403 表示桶存在但无探测权限，交给 CreateBucket 幂等裁决；
+// 网络/凭据等其他失败返回 false，交由业务请求与上层 Probe 暴露问题。
+func shouldCreateBucket(err error) bool {
+	var notFound *types.NotFound
+	if errors.As(err, &notFound) {
+		return true
+	}
+	status := httpStatus(err)
+	return status == 404 || status == 403
+}
+
+// alreadyExists 判断 CreateBucket 错误是否为桶已存在（并发创建或权限探测误判）。
+func alreadyExists(err error) bool {
+	var conflict *types.BucketAlreadyExists
+	if errors.As(err, &conflict) {
+		return true
+	}
+	var owned *types.BucketAlreadyOwnedByYou
+	if errors.As(err, &owned) {
+		return true
+	}
+	return httpStatus(err) == 409
+}
+
+// httpStatus 提取 S3 错误对应的 HTTP 状态码，无法识别时返回 0。
+func httpStatus(err error) int {
+	var resp interface{ HTTPStatusCode() int }
+	if errors.As(err, &resp) {
+		return resp.HTTPStatusCode()
+	}
+	return 0
 }
 
 // s3Endpoint 返回 SDK 使用的 S3 兼容 endpoint，内网直连地址优先。

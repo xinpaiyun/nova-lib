@@ -106,6 +106,8 @@ type TenancyConfig struct {
 // StorageConfig 定义本地文件存储或 S3 兼容对象存储配置。
 // PrivateBucket 为 true 时读取走预签名 URL 并自动启用本地缓存（CacheDir 非空时），
 // 为 false 时读取走公有直连地址。
+// S3 模式启动时若桶不存在会自动创建；自动创建的公共桶（private_bucket=false）
+// 会一并设置 public-read ACL，已存在的桶不改 ACL。
 type StorageConfig struct {
 	Driver           string `yaml:"driver"`
 	LocalDir         string `yaml:"local_dir"`

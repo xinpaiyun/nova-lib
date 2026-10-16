@@ -9,6 +9,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"gorm.io/gorm"
 
+	"github.com/xinpaiyun/nova-lib/auth"
 	"github.com/xinpaiyun/nova-lib/logging"
 	"github.com/xinpaiyun/nova-lib/org"
 	"github.com/xinpaiyun/nova-lib/response"
@@ -49,6 +50,12 @@ func RequireTenantMember(opts TenantMemberOptions) app.HandlerFunc {
 	cache := newMemberCache(ttl)
 	return func(ctx context.Context, c *app.RequestContext) {
 		userID, ok := UserIDFromContext(c)
+		if !ok {
+			// 兼容把身份写入 context.Context 的项目鉴权中间件（如 auth.ContextWithClaims）。
+			if claims, ok := auth.ClaimsFromContext(ctx); ok && claims.UserID > 0 {
+				userID, ok = claims.UserID, true
+			}
+		}
 		if !ok {
 			response.Error(c, consts.StatusUnauthorized, "请先登录")
 			c.Abort()

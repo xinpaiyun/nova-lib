@@ -19,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"github.com/xinpaiyun/nova-lib/config"
+	"github.com/xinpaiyun/nova-lib/logging"
 )
 
 var (
@@ -319,7 +320,19 @@ func (s *S3Store) ensureBucket(ctx context.Context) error {
 		return fmt.Errorf("对象存储未初始化")
 	}
 	_, err := s.client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: &s.cfg.BucketName})
-	if err == nil || !shouldCreateBucket(err) {
+	if err == nil {
+		logging.Info("oss bucket ready",
+			"bucket", s.cfg.BucketName,
+			"visibility", bucketVisibility(s.cfg.PrivateBucket),
+		)
+		return nil
+	}
+	if !shouldCreateBucket(err) {
+		// 网络/凭据等无法判定：静默跳过，问题交由业务请求与上层 Probe 暴露。
+		logging.Warn("oss bucket probe undetermined, skip auto create",
+			"bucket", s.cfg.BucketName,
+			"error", err,
+		)
 		return nil
 	}
 	input := &s3.CreateBucketInput{Bucket: &s.cfg.BucketName}
@@ -331,10 +344,19 @@ func (s *S3Store) ensureBucket(ctx context.Context) error {
 	}
 	if _, err := s.client.CreateBucket(ctx, input); err != nil {
 		if alreadyExists(err) {
+			logging.Info("oss bucket ready",
+				"bucket", s.cfg.BucketName,
+				"visibility", bucketVisibility(s.cfg.PrivateBucket),
+				"note", "created concurrently by another instance",
+			)
 			return nil
 		}
 		return fmt.Errorf("自动创建对象存储桶 %s 失败: %v", s.cfg.BucketName, err)
 	}
+	logging.Info("oss bucket auto-created",
+		"bucket", s.cfg.BucketName,
+		"visibility", bucketVisibility(s.cfg.PrivateBucket),
+	)
 	if !s.cfg.PrivateBucket {
 		acl := types.BucketCannedACLPublicRead
 		if _, err := s.client.PutBucketAcl(ctx, &s3.PutBucketAclInput{
@@ -343,8 +365,17 @@ func (s *S3Store) ensureBucket(ctx context.Context) error {
 		}); err != nil {
 			return fmt.Errorf("设置对象存储桶 %s 公共读失败: %v", s.cfg.BucketName, err)
 		}
+		logging.Info("oss bucket acl set", "bucket", s.cfg.BucketName, "acl", "public-read")
 	}
 	return nil
+}
+
+// bucketVisibility 返回桶的可见性描述，用于启动日志。
+func bucketVisibility(private bool) string {
+	if private {
+		return "private"
+	}
+	return "public-read"
 }
 
 // shouldCreateBucket 判断桶探测错误是否值得尝试创建：

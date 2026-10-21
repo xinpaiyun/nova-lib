@@ -296,9 +296,20 @@ func NewS3Store(cfg config.StorageConfig) (*S3Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 阿里云 OSS 已停止 path-style（二级域名）访问：HeadBucket 直接 403、CreateBucket
+	// 返回 SecondLevelDomainForbidden。endpoint 指向阿里云却配置 force_path_style 时
+	// 自动纠偏为 virtual-host，并打警告提示修正配置。
+	endpoint := strings.TrimSpace(s3Endpoint(cfg))
+	usePathStyle, corrected := resolveUsePathStyle(cfg)
+	if corrected {
+		logging.Warn("oss force_path_style ignored for aliyun endpoint",
+			"endpoint", endpoint,
+			"note", "阿里云 OSS 仅支持 virtual-host（三级域名）访问，已自动纠偏",
+		)
+	}
 	client := s3.NewFromConfig(awsCfg, func(options *s3.Options) {
-		options.UsePathStyle = cfg.ForcePathStyle
-		if endpoint := strings.TrimSpace(s3Endpoint(cfg)); endpoint != "" {
+		options.UsePathStyle = usePathStyle
+		if endpoint != "" {
 			options.BaseEndpoint = &endpoint
 		}
 		// 阿里云 OSS S3 兼容层不支持 SDK 默认的 aws-chunked 校验和上传。
@@ -339,7 +350,7 @@ func (s *S3Store) ensureBucket(ctx context.Context) error {
 	// 非默认区域需显式声明 LocationConstraint，us-east-1 与空 region 省略。
 	if region := strings.TrimSpace(s.cfg.Region); region != "" && region != "us-east-1" {
 		input.CreateBucketConfiguration = &types.CreateBucketConfiguration{
-			LocationConstraint: types.BucketLocationConstraint(region),
+			LocationConstraint: types.BucketLocationConstraint(ossLocationConstraint(region, s3Endpoint(s.cfg))),
 		}
 	}
 	if _, err := s.client.CreateBucket(ctx, input); err != nil {
@@ -410,6 +421,32 @@ func httpStatus(err error) int {
 		return resp.HTTPStatusCode()
 	}
 	return 0
+}
+
+// ossLocationConstraint 返回 CreateBucket 使用的 LocationConstraint：
+// 阿里云 OSS 的 S3 兼容层只接受带 oss- 前缀的区域 ID（cn-beijing → oss-cn-beijing），
+// 其余 S3 兼容存储原样返回。
+func ossLocationConstraint(region, endpoint string) string {
+	if isAliyunOSSEndpoint(endpoint) && !strings.HasPrefix(region, "oss-") {
+		return "oss-" + region
+	}
+	return region
+}
+
+// resolveUsePathStyle 决定 S3 客户端是否使用 path-style 访问：
+// 阿里云 OSS 已停止 path-style（二级域名）访问，HeadBucket 直接 403、CreateBucket
+// 返回 SecondLevelDomainForbidden；endpoint 指向阿里云却配置 force_path_style 时
+// 自动纠偏为 virtual-host，corrected 标记是否发生纠偏。
+func resolveUsePathStyle(cfg config.StorageConfig) (usePathStyle, corrected bool) {
+	if cfg.ForcePathStyle && isAliyunOSSEndpoint(s3Endpoint(cfg)) {
+		return false, true
+	}
+	return cfg.ForcePathStyle, false
+}
+
+// isAliyunOSSEndpoint 判断 endpoint 是否指向阿里云 OSS（公网/内网域名均含 aliyuncs.com）。
+func isAliyunOSSEndpoint(endpoint string) bool {
+	return strings.Contains(endpoint, "aliyuncs.com")
 }
 
 // s3Endpoint 返回 SDK 使用的 S3 兼容 endpoint，内网直连地址优先。

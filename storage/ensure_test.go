@@ -135,6 +135,61 @@ func TestShouldCreateBucketDecisionTable(t *testing.T) {
 	}
 }
 
+// TestOssLocationConstraint 阿里云 OSS 端点补 oss- 区域前缀，其余端点原样返回。
+func TestOssLocationConstraint(t *testing.T) {
+	cases := []struct {
+		name     string
+		region   string
+		endpoint string
+		want     string
+	}{
+		{"aliyun plain region", "cn-beijing", "oss-cn-beijing.aliyuncs.com", "oss-cn-beijing"},
+		{"aliyun internal endpoint", "cn-hangzhou", "oss-cn-hangzhou-internal.aliyuncs.com", "oss-cn-hangzhou"},
+		{"aliyun already prefixed", "oss-cn-beijing", "oss-cn-beijing.aliyuncs.com", "oss-cn-beijing"},
+		{"non-aliyun unchanged", "cn-beijing", "127.0.0.1:9000", "cn-beijing"},
+		{"minio unchanged", "us-east-1", "minio.example.com", "us-east-1"},
+	}
+	for _, tc := range cases {
+		if got := ossLocationConstraint(tc.region, tc.endpoint); got != tc.want {
+			t.Fatalf("%s: ossLocationConstraint = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestResolveUsePathStyle 阿里云端点强制纠偏为 virtual-host，其余端点遵循配置。
+func TestResolveUsePathStyle(t *testing.T) {
+	cases := []struct {
+		name           string
+		endpoint       string
+		forcePathStyle bool
+		wantPathStyle  bool
+		wantCorrected  bool
+	}{
+		{"aliyun with path style", "https://oss-cn-beijing.aliyuncs.com", true, false, true},
+		{"aliyun internal with path style", "http://oss-cn-hangzhou-internal.aliyuncs.com", true, false, true},
+		{"aliyun without path style", "https://oss-cn-beijing.aliyuncs.com", false, false, false},
+		{"minio keeps path style", "http://127.0.0.1:9000", true, true, false},
+		{"empty endpoint keeps config", "", true, true, false},
+	}
+	for _, tc := range cases {
+		cfg := config.StorageConfig{Endpoint: tc.endpoint, UseSSL: false, ForcePathStyle: tc.forcePathStyle}
+		gotPathStyle, gotCorrected := resolveUsePathStyle(cfg)
+		if gotPathStyle != tc.wantPathStyle || gotCorrected != tc.wantCorrected {
+			t.Fatalf("%s: resolveUsePathStyle = (%v, %v), want (%v, %v)",
+				tc.name, gotPathStyle, gotCorrected, tc.wantPathStyle, tc.wantCorrected)
+		}
+	}
+}
+
+// TestNewS3StoreKeepsPathStyleForNonAliyun 本地兼容存储不受纠偏影响，path-style 保持生效。
+func TestNewS3StoreKeepsPathStyleForNonAliyun(t *testing.T) {
+	fake := &fakeOSS{headStatus: http.StatusOK}
+	store := fake.newStore(t, false)
+	if !store.client.Options().UsePathStyle {
+		t.Fatalf("UsePathStyle = false, want true for non-aliyun endpoint")
+	}
+}
+
 // fakeHTTPError 模拟带 HTTP 状态码的 S3 错误。
 type fakeHTTPError struct{ status int }
 

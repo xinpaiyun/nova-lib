@@ -246,7 +246,9 @@ func (s *Service) SaveWechatApp(ctx context.Context, tenantID uint64, req SaveWe
 	if req.AppSecret != "" && s.masterKey == "" {
 		return WechatAppVO{}, ErrMasterKeyMissing
 	}
-	app, err := s.store.SaveWechatApp(ctx, tenantID, req.AppID, strings.TrimSpace(req.AppSecret), req.Enabled, s.masterKey)
+	// 双写 tenant_wechat_apps + tenant_wechat_configs：登录反查（appid→secret）与
+	// 支付解析（configs 密文）共用一份绑定，chehuixing 等按 configs 登录的项目同源生效。
+	app, err := s.store.SaveWechatBinding(ctx, tenantID, req.AppID, strings.TrimSpace(req.AppSecret), req.Enabled, s.masterKey)
 	if err != nil {
 		return WechatAppVO{}, err
 	}

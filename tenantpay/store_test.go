@@ -123,6 +123,14 @@ func TestWechatAppLoginLookup(t *testing.T) {
 	if _, _, _, err := svc.WechatAppForLogin(ctx, "wx-missing"); err != ErrNotFound {
 		t.Fatalf("未绑定 appid 应返回 ErrNotFound: %v", err)
 	}
+	// 双写校验：configs 表同步落库（appID/secret 密文/启用），支付字段保留。
+	var cfgRow TenantWechatConfig
+	if err := store.db.Where("tenant_id = ?", uint64(5)).First(&cfgRow).Error; err != nil {
+		t.Fatalf("configs 表应同步写入: %v", err)
+	}
+	if cfgRow.AppID != "wx-t5" || cfgRow.AppSecret == "sec-t5" || !cfgRow.Enabled {
+		t.Fatalf("configs 表绑定字段不正确: %+v", cfgRow)
+	}
 	// 历史明文行兼容读取（直插明文 secret）。
 	if err := store.db.Create(&TenantWechatApp{TenantID: 8, AppID: "wx-legacy", AppSecret: "legacy-plain", Enabled: true}).Error; err != nil {
 		t.Fatalf("插入历史行失败: %v", err)

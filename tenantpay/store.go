@@ -141,6 +141,67 @@ func (s *Store) ListAllWechatApps(ctx context.Context) ([]TenantWechatApp, error
 	return apps, nil
 }
 
+// SaveWechatBinding 单事务双写小程序绑定：tenant_wechat_apps（appid 反查/登录）与
+// tenant_wechat_configs（支付代配，保留 mchid/APIv3 密钥/回调地址等支付字段仅更新绑定字段）。
+// secret 以明文入参、AES-256-GCM 密文落库；留空保留旧值。tenant_id=0 约定为平台官方小程序。
+func (s *Store) SaveWechatBinding(ctx context.Context, tenantID uint64, appID, appSecret string, enabled bool, masterKey string) (TenantWechatApp, error) {
+	secret, err := Encrypt(masterKey, appSecret)
+	if err != nil {
+		return TenantWechatApp{}, err
+	}
+	var app TenantWechatApp
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// tenant_wechat_apps：appid 全局唯一 upsert。
+		if err := tx.Where("app_id = ?", appID).First(&app).Error; err == nil {
+			app.TenantID = tenantID
+			if appSecret != "" {
+				app.AppSecret = secret
+			}
+			app.Enabled = enabled
+			if err := tx.Save(&app).Error; err != nil {
+				return err
+			}
+		} else if errors.Is(err, gorm.ErrRecordNotFound) {
+			app = TenantWechatApp{
+				TenantID:  tenantID,
+				AppID:     appID,
+				AppSecret: secret,
+				Enabled:   enabled,
+			}
+			if err := tx.Create(&app).Error; err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
+		// tenant_wechat_configs：按租户 upsert，仅更新绑定字段（AppID/secret/启用），
+		// 支付字段（MchID/APIv3 密钥/NotifyURL）保留旧值。
+		var cfg TenantWechatConfig
+		if err := tx.Where("tenant_id = ?", tenantID).First(&cfg).Error; err == nil {
+			cfg.AppID = appID
+			if appSecret != "" {
+				cfg.AppSecret = secret
+			}
+			cfg.Enabled = enabled
+			return tx.Save(&cfg).Error
+		} else if errors.Is(err, gorm.ErrRecordNotFound) {
+			cfg = TenantWechatConfig{
+				TenantID:  tenantID,
+				AppID:     appID,
+				AppSecret: secret,
+				Enabled:   enabled,
+			}
+			return tx.Create(&cfg).Error
+		} else {
+			return err
+		}
+	})
+	if err != nil {
+		return TenantWechatApp{}, err
+	}
+	return app, nil
+}
+
 // FindEnabledWechatApp 按已启用 appid 查绑定行（微信登录反查 secret 用，AppSecret 为密文或历史明文）。
 func (s *Store) FindEnabledWechatApp(ctx context.Context, appID string) (TenantWechatApp, error) {
 	var app TenantWechatApp

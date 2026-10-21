@@ -50,8 +50,8 @@ func NewExecutor(store *Store, resolver *Resolver, masterKey, platformMch string
 
 // 业务错误。
 var (
-	ErrNoCommission      = errors.New("该租户未启用抽成")
-	ErrPlatformMchMissed = errors.New("平台商户号未配置，无法分账")
+	ErrNoCommission       = errors.New("该租户未启用抽成")
+	ErrPlatformMchMissed  = errors.New("平台商户号未配置，无法分账")
 	ErrPSAlreadySucceeded = errors.New("分账已成功，无需重复操作")
 )
 

@@ -52,9 +52,18 @@ func TestPayConfigSaveAndFind(t *testing.T) {
 func TestWechatAppLookup(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
+	const masterKey = "0123456789abcdef0123456789abcdef"
 
-	if _, err := store.SaveWechatApp(ctx, 7, "wx-app-7", "secret-7", true); err != nil {
+	if _, err := store.SaveWechatApp(ctx, 7, "wx-app-7", "secret-7", true, masterKey); err != nil {
 		t.Fatalf("保存小程序失败: %v", err)
+	}
+	// secret 应密文落库。
+	var row TenantWechatApp
+	if err := store.db.Where("app_id = ?", "wx-app-7").First(&row).Error; err != nil {
+		t.Fatalf("查询绑定行失败: %v", err)
+	}
+	if row.AppSecret == "secret-7" || len(row.AppSecret) < 8 {
+		t.Fatalf("secret 应为密文: %q", row.AppSecret)
 	}
 	tenantID, err := store.FindTenantIDByAppID(ctx, "wx-app-7")
 	if err != nil || tenantID != 7 {
@@ -63,12 +72,64 @@ func TestWechatAppLookup(t *testing.T) {
 	if _, err := store.FindTenantIDByAppID(ctx, "wx-missing"); err != ErrNotFound {
 		t.Fatalf("未知 appid 应返回 ErrNotFound: %v", err)
 	}
-	// 禁用后不可反查。
-	if _, err := store.SaveWechatApp(ctx, 7, "wx-app-7", "", false); err != nil {
+	// 禁用后不可反查（secret 留空保留旧值）。
+	if _, err := store.SaveWechatApp(ctx, 7, "wx-app-7", "", false, masterKey); err != nil {
 		t.Fatalf("更新小程序失败: %v", err)
 	}
 	if _, err := store.FindTenantIDByAppID(ctx, "wx-app-7"); err != ErrNotFound {
 		t.Fatalf("禁用后应返回 ErrNotFound: %v", err)
+	}
+}
+
+// TestWechatAppLoginLookup 覆盖平台代管绑定（官方 tenant_id=0）、密文落库与登录反查。
+func TestWechatAppLoginLookup(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	const masterKey = "0123456789abcdef0123456789abcdef"
+	svc := NewService(store, nil, nil, masterKey)
+
+	// 官方小程序（tenant_id=0）与租户绑定并存。
+	if _, err := svc.SaveWechatApp(ctx, 0, SaveWechatAppRequest{AppID: "wx-official", AppSecret: "sec-official", Enabled: true}); err != nil {
+		t.Fatalf("保存官方绑定失败: %v", err)
+	}
+	if _, err := svc.SaveWechatApp(ctx, 5, SaveWechatAppRequest{AppID: "wx-t5", AppSecret: "sec-t5", Enabled: true}); err != nil {
+		t.Fatalf("保存租户绑定失败: %v", err)
+	}
+	// masterKey 缺失时禁止写入新 secret。
+	if _, err := NewService(store, nil, nil, "").SaveWechatApp(ctx, 6, SaveWechatAppRequest{AppID: "wx-t6", AppSecret: "sec-t6", Enabled: true}); err != ErrMasterKeyMissing {
+		t.Fatalf("缺主密钥应报 ErrMasterKeyMissing: %v", err)
+	}
+	// 全平台列表含官方与租户。
+	all, err := svc.ListAllWechatApps(ctx)
+	if err != nil || len(all) != 2 {
+		t.Fatalf("全平台列表: len=%d err=%v", len(all), err)
+	}
+	if all[0].TenantID != 0 || all[0].AppID != "wx-official" || !all[0].HasSecret {
+		t.Fatalf("官方绑定 VO 不正确: %+v", all[0])
+	}
+	// 登录反查：解密 secret、绑定 appid 与租户。
+	for _, tc := range []struct {
+		appID, secret string
+		tenantID      uint64
+	}{
+		{"wx-official", "sec-official", 0},
+		{"wx-t5", "sec-t5", 5},
+	} {
+		tenantID, boundAppID, sec, err := svc.WechatAppForLogin(ctx, tc.appID)
+		if err != nil || tenantID != tc.tenantID || boundAppID != tc.appID || sec != tc.secret {
+			t.Fatalf("登录反查 %s: tenant=%d app=%s sec=%s err=%v", tc.appID, tenantID, boundAppID, sec, err)
+		}
+	}
+	if _, _, _, err := svc.WechatAppForLogin(ctx, "wx-missing"); err != ErrNotFound {
+		t.Fatalf("未绑定 appid 应返回 ErrNotFound: %v", err)
+	}
+	// 历史明文行兼容读取（直插明文 secret）。
+	if err := store.db.Create(&TenantWechatApp{TenantID: 8, AppID: "wx-legacy", AppSecret: "legacy-plain", Enabled: true}).Error; err != nil {
+		t.Fatalf("插入历史行失败: %v", err)
+	}
+	tenantID, _, sec, err := svc.WechatAppForLogin(ctx, "wx-legacy")
+	if err != nil || tenantID != 8 || sec != "legacy-plain" {
+		t.Fatalf("历史明文行应兼容: tenant=%d sec=%s err=%v", tenantID, sec, err)
 	}
 }
 

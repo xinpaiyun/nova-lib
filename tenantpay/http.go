@@ -34,10 +34,12 @@ func NewHandler(service *Service) *Handler {
 //
 // 商户端（Auth + RequireTenantID，挂 /admin/tenant-pay）：
 //
-//	GET/PUT  /admin/tenant-pay/wechat-config     微信支付配置（商户自助）
-//	GET/POST /admin/tenant-pay/wechat-apps       小程序绑定
-//	GET      /admin/tenant-pay/commission        抽成配置（只读）
-//	GET      /admin/tenant-pay/profit-sharing-orders  分账流水（只读）
+//		GET/PUT  /admin/tenant-pay/wechat-config     微信支付配置（商户自助）
+//	  GET/POST /admin/tenant-pay/wechat-apps       小程序绑定（商户端自助）
+//	  GET  /admin/tenant-pay/platform/wechat-apps  小程序绑定全平台列表（平台端，含官方 tenant_id=0）
+//	  POST /admin/tenant-pay/platform/tenants/:id/wechat-apps 平台代管绑定（secret 密文落库）
+//		GET      /admin/tenant-pay/commission        抽成配置（只读）
+//		GET      /admin/tenant-pay/profit-sharing-orders  分账流水（只读）
 //
 // 平台端（Auth + RequirePlatformAdmin，挂 /admin/tenant-pay/platform）：
 //
@@ -78,6 +80,8 @@ func (g *routeGroup) Register(group *route.RouterGroup) {
 	platform.PUT("/tenants/:tenantID/wechat-config", g.saveWechatConfigOfParam)
 	platform.GET("/tenants/:tenantID/commission", g.getCommissionOfParam)
 	platform.PUT("/tenants/:tenantID/commission", g.saveCommissionOfParam)
+	platform.GET("/wechat-apps", g.listAllWechatApps)
+	platform.POST("/tenants/:tenantID/wechat-apps", g.saveWechatAppOfParam)
 	platform.GET("/profit-sharing-orders", g.listAllPSOrders)
 	platform.POST("/profit-sharing-orders/:id/retry", g.retryPSOrder)
 }
@@ -290,6 +294,31 @@ func (g *routeGroup) saveCommissionOfParam(ctx context.Context, c *app.RequestCo
 		return
 	}
 	result, err := g.service.SaveCommission(ctx, pathUint(c, "tenantID"), req)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	responseSuccess(c, result)
+}
+
+// listAllWechatApps 平台端列出全平台小程序绑定（含官方 tenant_id=0）。
+func (g *routeGroup) listAllWechatApps(ctx context.Context, c *app.RequestContext) {
+	list, err := g.service.ListAllWechatApps(ctx)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	responseSuccess(c, list)
+}
+
+// saveWechatAppOfParam 平台端按租户保存小程序绑定（tenant_id=0 即官方小程序，secret 密文落库）。
+func (g *routeGroup) saveWechatAppOfParam(ctx context.Context, c *app.RequestContext) {
+	var req SaveWechatAppRequest
+	if err := c.BindJSON(&req); err != nil {
+		responseBadRequest(c, "请求体格式不正确")
+		return
+	}
+	result, err := g.service.SaveWechatApp(ctx, pathUint(c, "tenantID"), req)
 	if err != nil {
 		writeError(c, err)
 		return

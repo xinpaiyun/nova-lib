@@ -236,13 +236,17 @@ func (s *Service) wechatPayConfigVO(ctx context.Context, tenantID uint64, saved 
 
 // ---------- 小程序绑定 ----------
 
-// SaveWechatApp 保存租户小程序绑定（appid 幂等，secret 留空保留旧值）。
+// SaveWechatApp 保存租户小程序绑定（appid 幂等，secret 留空保留旧值，密文落库）。
+// tenant_id=0 约定为平台官方小程序；masterKey 未配置且提供新 secret 时报错。
 func (s *Service) SaveWechatApp(ctx context.Context, tenantID uint64, req SaveWechatAppRequest) (WechatAppVO, error) {
 	req.AppID = strings.TrimSpace(req.AppID)
 	if req.AppID == "" {
 		return WechatAppVO{}, ErrAppIDRequired
 	}
-	app, err := s.store.SaveWechatApp(ctx, tenantID, req.AppID, strings.TrimSpace(req.AppSecret), req.Enabled)
+	if req.AppSecret != "" && s.masterKey == "" {
+		return WechatAppVO{}, ErrMasterKeyMissing
+	}
+	app, err := s.store.SaveWechatApp(ctx, tenantID, req.AppID, strings.TrimSpace(req.AppSecret), req.Enabled, s.masterKey)
 	if err != nil {
 		return WechatAppVO{}, err
 	}
@@ -260,6 +264,33 @@ func (s *Service) ListWechatApps(ctx context.Context, tenantID uint64) ([]Wechat
 		list = append(list, wechatAppVO(app))
 	}
 	return list, nil
+}
+
+// ListAllWechatApps 列出全平台小程序绑定（平台端管理用，含官方 tenant_id=0）。
+func (s *Service) ListAllWechatApps(ctx context.Context) ([]WechatAppVO, error) {
+	apps, err := s.store.ListAllWechatApps(ctx)
+	if err != nil {
+		return nil, err
+	}
+	list := make([]WechatAppVO, 0, len(apps))
+	for _, app := range apps {
+		list = append(list, wechatAppVO(app))
+	}
+	return list, nil
+}
+
+// WechatAppForLogin 微信登录反查：按已启用 appid 取绑定行并解密 secret。
+// 历史明文行由 Decrypt 兼容读取（无 enc.v1 前缀原样返回）；查不到返回 ErrNotFound。
+func (s *Service) WechatAppForLogin(ctx context.Context, appID string) (tenantID uint64, boundAppID string, appSecret string, err error) {
+	app, err := s.store.FindEnabledWechatApp(ctx, strings.TrimSpace(appID))
+	if err != nil {
+		return 0, "", "", err
+	}
+	secret, err := Decrypt(s.masterKey, app.AppSecret)
+	if err != nil {
+		return 0, "", "", err
+	}
+	return app.TenantID, app.AppID, secret, nil
 }
 
 // wechatAppVO 组装小程序视图。

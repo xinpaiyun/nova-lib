@@ -85,13 +85,19 @@ func (s *Store) SavePayConfig(ctx context.Context, tenantID uint64, provider, co
 // ---------- 小程序绑定（tenant_wechat_apps） ----------
 
 // SaveWechatApp 保存租户小程序绑定（appid 幂等 upsert，留空 secret 保留旧值）。
-func (s *Store) SaveWechatApp(ctx context.Context, tenantID uint64, appID, appSecret string, enabled bool) (TenantWechatApp, error) {
+// appSecret 以明文入参、AES-256-GCM 密文落库（tenant_id=0 约定为平台官方小程序）；
+// 提供非空 secret 时必须传入合法 masterKey（复用 tenantpay.Encrypt 校验）。
+func (s *Store) SaveWechatApp(ctx context.Context, tenantID uint64, appID, appSecret string, enabled bool, masterKey string) (TenantWechatApp, error) {
+	secret, err := Encrypt(masterKey, appSecret)
+	if err != nil {
+		return TenantWechatApp{}, err
+	}
 	var app TenantWechatApp
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("app_id = ?", appID).First(&app).Error; err == nil {
 			app.TenantID = tenantID
 			if appSecret != "" {
-				app.AppSecret = appSecret
+				app.AppSecret = secret
 			}
 			app.Enabled = enabled
 			return tx.Save(&app).Error
@@ -101,7 +107,7 @@ func (s *Store) SaveWechatApp(ctx context.Context, tenantID uint64, appID, appSe
 		app = TenantWechatApp{
 			TenantID:  tenantID,
 			AppID:     appID,
-			AppSecret: appSecret,
+			AppSecret: secret,
 			Enabled:   enabled,
 		}
 		return tx.Create(&app).Error
@@ -122,6 +128,28 @@ func (s *Store) ListWechatApps(ctx context.Context, tenantID uint64) ([]TenantWe
 		return nil, err
 	}
 	return apps, nil
+}
+
+// ListAllWechatApps 列出全平台小程序绑定（平台端管理用，含官方 tenant_id=0）。
+func (s *Store) ListAllWechatApps(ctx context.Context) ([]TenantWechatApp, error) {
+	var apps []TenantWechatApp
+	if err := s.db.WithContext(ctx).
+		Order("tenant_id ASC, id ASC").
+		Find(&apps).Error; err != nil {
+		return nil, err
+	}
+	return apps, nil
+}
+
+// FindEnabledWechatApp 按已启用 appid 查绑定行（微信登录反查 secret 用，AppSecret 为密文或历史明文）。
+func (s *Store) FindEnabledWechatApp(ctx context.Context, appID string) (TenantWechatApp, error) {
+	var app TenantWechatApp
+	if err := s.db.WithContext(ctx).
+		Where("app_id = ? AND enabled = ?", appID, true).
+		First(&app).Error; err != nil {
+		return TenantWechatApp{}, normalizeError(err)
+	}
+	return app, nil
 }
 
 // FindEnabledWechatAppByTenant 返回租户第一个启用的小程序（appid 为支付 JSAPI 下单方）。

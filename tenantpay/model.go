@@ -19,11 +19,13 @@ type IntegrationConfig struct {
 func (IntegrationConfig) TableName() string { return "integration_configs" }
 
 // TenantWechatApp 租户绑定的小程序（与宿主底座 tenant_wechat_apps 表共用，列名对齐）。
+// AppSecret 以 AES-256-GCM 密文落库（enc.v1: 前缀）；历史明文行由 Decrypt 兼容读取。
+// tenant_id=0 约定为平台官方小程序。
 type TenantWechatApp struct {
 	ID        uint64    `gorm:"primaryKey" json:"id"`
 	TenantID  uint64    `gorm:"index;column:tenant_id" json:"tenantId"`
 	AppID     string    `gorm:"size:32;uniqueIndex" json:"appId"`
-	AppSecret string    `gorm:"size:128" json:"-"`
+	AppSecret string    `gorm:"size:256" json:"-"`
 	Enabled   bool      `json:"enabled"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`

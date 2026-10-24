@@ -34,6 +34,12 @@ func (e *engine) Claim(ctx context.Context, tenantID, holderID, couponID uint64,
 	return e.store.Claim(ctx, tenantID, holderID, couponID, orderAmount, ref)
 }
 
+// ClaimInShop 在门店上下文核销优惠券（org-shop-member 契约）：门店券仅指定门店可核销，
+// 品牌券不受限制；shopID=0（品牌级上下文）时门店券不可核销。
+func (e *engine) ClaimInShop(ctx context.Context, tenantID, holderID, couponID, shopID uint64, orderAmount int64, ref Ref) (int64, string, error) {
+	return e.store.ClaimInShop(ctx, tenantID, holderID, couponID, shopID, orderAmount, ref)
+}
+
 // Issue 向持有者批量发放优惠券：去重并剔除非法 ID 后交由存储事务发放。
 func (e *engine) Issue(ctx context.Context, tenantID, templateID uint64, holderIDs []uint64) (int, error) {
 	seen := make(map[uint64]bool, len(holderIDs))
@@ -95,14 +101,16 @@ func (e *engine) UpdateTemplate(ctx context.Context, tenantID, id uint64, t Temp
 		return ErrInvalidStatus
 	}
 	updates := map[string]any{
-		"name":        template.Name,
-		"amount":      template.Amount,
-		"min_spend":   template.MinSpend,
-		"valid_days":  template.ValidDays,
-		"total_count": template.TotalCount,
-		"status":      t.Status,
-		"remark":      template.Remark,
-		"updated_at":  time.Now(),
+		"name":           template.Name,
+		"amount":         template.Amount,
+		"min_spend":      template.MinSpend,
+		"valid_days":     template.ValidDays,
+		"total_count":    template.TotalCount,
+		"scope_type":     template.ScopeType,
+		"verify_shop_id": template.VerifyShopID,
+		"status":         t.Status,
+		"remark":         template.Remark,
+		"updated_at":     time.Now(),
 	}
 	return e.store.UpdateTemplate(ctx, tenantID, id, updates)
 }
@@ -154,47 +162,69 @@ func buildTemplate(t Template) (CouponTemplate, error) {
 	if t.TotalCount < 0 {
 		return CouponTemplate{}, ErrInvalidTotalCount
 	}
+	// 作用域校验（org-shop-member 契约）：门店券必须指定核销门店，品牌券强制清零。
+	scopeType := t.ScopeType
+	if scopeType == "" {
+		scopeType = ScopeTenant
+	}
+	if scopeType != ScopeTenant && scopeType != ScopeShop {
+		return CouponTemplate{}, ErrInvalidScopeType
+	}
+	verifyShopID := t.VerifyShopID
+	if scopeType == ScopeShop {
+		if verifyShopID == 0 {
+			return CouponTemplate{}, ErrShopRequired
+		}
+	} else {
+		verifyShopID = 0
+	}
 	return CouponTemplate{
-		Name:       name,
-		Amount:     t.Amount,
-		MinSpend:   t.MinSpend,
-		ValidDays:  t.ValidDays,
-		TotalCount: t.TotalCount,
-		Remark:     strings.TrimSpace(t.Remark),
+		Name:         name,
+		Amount:       t.Amount,
+		MinSpend:     t.MinSpend,
+		ValidDays:    t.ValidDays,
+		TotalCount:   t.TotalCount,
+		ScopeType:    scopeType,
+		VerifyShopID: verifyShopID,
+		Remark:       strings.TrimSpace(t.Remark),
 	}, nil
 }
 
 // templateOf 将模板模型转换为契约视图。
 func templateOf(t CouponTemplate) Template {
 	return Template{
-		ID:          t.ID,
-		Name:        t.Name,
-		Amount:      t.Amount,
-		MinSpend:    t.MinSpend,
-		ValidDays:   t.ValidDays,
-		TotalCount:  t.TotalCount,
-		IssuedCount: t.IssuedCount,
-		UsedCount:   t.UsedCount,
-		Status:      t.Status,
-		Remark:      t.Remark,
-		CreatedAt:   t.CreatedAt,
-		UpdatedAt:   t.UpdatedAt,
+		ID:           t.ID,
+		Name:         t.Name,
+		Amount:       t.Amount,
+		MinSpend:     t.MinSpend,
+		ValidDays:    t.ValidDays,
+		TotalCount:   t.TotalCount,
+		IssuedCount:  t.IssuedCount,
+		UsedCount:    t.UsedCount,
+		ScopeType:    t.ScopeType,
+		VerifyShopID: t.VerifyShopID,
+		Status:       t.Status,
+		Remark:       t.Remark,
+		CreatedAt:    t.CreatedAt,
+		UpdatedAt:    t.UpdatedAt,
 	}
 }
 
 // couponOf 将券实例模型转换为契约视图。
 func couponOf(c CouponModel) Coupon {
 	return Coupon{
-		ID:         c.ID,
-		TemplateID: c.TemplateID,
-		HolderID:   c.HolderID,
-		Name:       c.Name,
-		Amount:     c.Amount,
-		MinSpend:   c.MinSpend,
-		Status:     c.Status,
-		ValidUntil: c.ValidUntil,
-		UsedAt:     c.UsedAt,
-		Ref:        Ref{Type: c.RefType, ID: c.RefID, No: c.RefNo},
-		CreatedAt:  c.CreatedAt,
+		ID:           c.ID,
+		TemplateID:   c.TemplateID,
+		HolderID:     c.HolderID,
+		Name:         c.Name,
+		Amount:       c.Amount,
+		MinSpend:     c.MinSpend,
+		ScopeType:    c.ScopeType,
+		VerifyShopID: c.VerifyShopID,
+		Status:       c.Status,
+		ValidUntil:   c.ValidUntil,
+		UsedAt:       c.UsedAt,
+		Ref:          Ref{Type: c.RefType, ID: c.RefID, No: c.RefNo},
+		CreatedAt:    c.CreatedAt,
 	}
 }

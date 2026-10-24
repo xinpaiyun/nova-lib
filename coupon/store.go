@@ -30,8 +30,11 @@ type Store interface {
 	// ListCoupons 分页查询券实例（含惰性过期）；holderID=0 表示全部持有者。
 	ListCoupons(ctx context.Context, tenantID, holderID uint64, status string, q member.PageQuery) ([]CouponModel, int64, error)
 	// Claim 事务核销优惠券：强校验归属/状态/有效期/门槛后原子占用，
-	// 返回核销抵扣金额与券名快照。
+	// 返回核销抵扣金额与券名快照。不校验门店作用域（存量结算路径）。
 	Claim(ctx context.Context, tenantID, holderID, couponID uint64, orderAmount int64, ref Ref) (int64, string, error)
+	// ClaimInShop 在门店上下文核销优惠券：门店券仅 verify_shop_id 匹配时可核销，
+	// 品牌券不受限制；shopID=0（品牌级上下文）时门店券不可核销。
+	ClaimInShop(ctx context.Context, tenantID, holderID, couponID, shopID uint64, orderAmount int64, ref Ref) (int64, string, error)
 }
 
 // gormStore 基于 GORM 的参考存储（兼容 MySQL 与 SQLite）。
@@ -155,13 +158,15 @@ func (s *gormStore) Issue(ctx context.Context, tenantID, templateID uint64, hold
 		validUntil := now.AddDate(0, 0, template.ValidDays)
 		for _, holderID := range holderIDs {
 			coupon := CouponModel{
-				TenantID:   tenantID,
-				TemplateID: template.ID,
-				HolderID:   holderID,
-				Name:       template.Name,
-				Amount:     template.Amount,
-				MinSpend:   template.MinSpend,
-				ValidUntil: validUntil,
+				TenantID:     tenantID,
+				TemplateID:   template.ID,
+				HolderID:     holderID,
+				Name:         template.Name,
+				Amount:       template.Amount,
+				MinSpend:     template.MinSpend,
+				ScopeType:    template.ScopeType,
+				VerifyShopID: template.VerifyShopID,
+				ValidUntil:   validUntil,
 			}
 			if err := tx.Create(&coupon).Error; err != nil {
 				return err
@@ -214,7 +219,19 @@ func (s *gormStore) ListCoupons(ctx context.Context, tenantID, holderID uint64, 
 
 // Claim 事务核销优惠券（结算抵扣）：校验归属/状态/有效期/门槛后原子占用，
 // 落关联单据并回写模板核销计数。返回核销抵扣金额与券名快照。
+// 不校验门店作用域（存量结算路径，带门店上下文的核销走 ClaimInShop）。
 func (s *gormStore) Claim(ctx context.Context, tenantID, holderID, couponID uint64, orderAmount int64, ref Ref) (int64, string, error) {
+	return s.claim(ctx, tenantID, holderID, couponID, orderAmount, ref, false, 0)
+}
+
+// ClaimInShop 在门店上下文核销优惠券（org-shop-member 契约）：门店券仅
+// verify_shop_id 匹配时可核销，品牌券不受限制；shopID=0（品牌级上下文）时门店券不可核销。
+func (s *gormStore) ClaimInShop(ctx context.Context, tenantID, holderID, couponID, shopID uint64, orderAmount int64, ref Ref) (int64, string, error) {
+	return s.claim(ctx, tenantID, holderID, couponID, orderAmount, ref, true, shopID)
+}
+
+// claim 核销共享实现：checkShop 为 true 时按券作用域校验核销门店。
+func (s *gormStore) claim(ctx context.Context, tenantID, holderID, couponID uint64, orderAmount int64, ref Ref, checkShop bool, shopID uint64) (int64, string, error) {
 	var amount int64
 	var name string
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -231,6 +248,10 @@ func (s *gormStore) Claim(ctx context.Context, tenantID, holderID, couponID uint
 			coupon.ValidUntil.Before(time.Now()) ||
 			coupon.MinSpend > orderAmount {
 			return ErrCouponNotAvailable
+		}
+		// 门店券仅绑定门店可核销（org-shop-member 契约）：含 shopID=0 的品牌级上下文。
+		if checkShop && coupon.ScopeType == ScopeShop && coupon.VerifyShopID != shopID {
+			return ErrCouponShopMismatch
 		}
 		now := time.Now()
 		result := tx.Model(&CouponModel{}).

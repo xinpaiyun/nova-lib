@@ -32,10 +32,14 @@ type CouponTemplate struct {
 	TotalCount  int       `json:"totalCount" gorm:"not null;default:0"`
 	IssuedCount int       `json:"issuedCount" gorm:"not null;default:0"`
 	UsedCount   int       `json:"usedCount" gorm:"not null;default:0"`
-	Status      string    `json:"status" gorm:"not null;size:16;default:enabled;index"`
-	Remark      string    `json:"remark,omitempty" gorm:"size:200"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	// ScopeType 作用域（org-shop-member 契约）：tenant 品牌券全店可核销；shop 门店券仅指定门店可核销。
+	ScopeType string `json:"scopeType" gorm:"not null;default:tenant;size:16"`
+	// VerifyShopID 核销门店（scope=shop 时必填；品牌券固定 0）。
+	VerifyShopID uint64    `json:"verifyShopId" gorm:"not null;default:0;index"`
+	Status       string    `json:"status" gorm:"not null;size:16;default:enabled;index"`
+	Remark       string    `json:"remark,omitempty" gorm:"size:200"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
 // TableName 返回优惠券模板表名。
@@ -56,6 +60,10 @@ type CouponModel struct {
 	Amount int64 `json:"amount" gorm:"not null;default:0"`
 	// MinSpend 使用门槛快照（分）。
 	MinSpend int64 `json:"minSpend" gorm:"not null;default:0"`
+	// ScopeType 作用域快照（发放时从模板固化）。
+	ScopeType string `json:"scopeType" gorm:"not null;default:tenant;size:16"`
+	// VerifyShopID 核销门店快照（0=品牌券全店通用）。
+	VerifyShopID uint64 `json:"verifyShopId" gorm:"not null;default:0;index"`
 	// Status 状态：unused/used/expired。
 	Status string `json:"status" gorm:"not null;size:16;default:unused;index"`
 	// ValidUntil 有效期至。

@@ -60,6 +60,9 @@ type RefundRequest struct {
 	Reason      string
 	TotalCents  int64
 	RefundCents int64
+	// NotifyURL 退款结果异步通知地址，留空回落支付回调配置（NotifyURL）。
+	// 退款与支付回调通常路由到不同端点，由调用方按需显式传入。
+	NotifyURL string
 }
 
 // SceneReportInfo 定义转账场景报备信息条目。
@@ -309,11 +312,16 @@ func (c *PayClient) CreateRefund(ctx context.Context, req RefundRequest) (*refun
 	if !c.Enabled() {
 		return nil, errors.New("微信支付未配置完成")
 	}
+	// 退款结果通知地址：请求级优先，留空回落支付回调配置。
+	notifyURL := strings.TrimSpace(req.NotifyURL)
+	if notifyURL == "" {
+		notifyURL = strings.TrimSpace(c.cfg.NotifyURL)
+	}
 	resp, _, err := (&refunddomestic.RefundsApiService{Client: c.client}).Create(ctx, refunddomestic.CreateRequest{
 		OutTradeNo:  core.String(strings.TrimSpace(req.OutTradeNo)),
 		OutRefundNo: core.String(strings.TrimSpace(req.OutRefundNo)),
 		Reason:      optionalString(req.Reason),
-		NotifyUrl:   optionalString(c.cfg.NotifyURL),
+		NotifyUrl:   optionalString(notifyURL),
 		Amount: &refunddomestic.AmountReq{
 			Refund:   core.Int64(req.RefundCents),
 			Total:    core.Int64(req.TotalCents),

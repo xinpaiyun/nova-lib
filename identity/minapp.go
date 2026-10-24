@@ -26,6 +26,10 @@ type WechatAppCredentials struct {
 // integration_configs/本地配置表）。小程序未接入时返回包装 ErrAppNotBound 的错误。
 type WechatAppSource func(ctx context.Context, appID string) (*WechatAppCredentials, error)
 
+// MiniAppSessionCustomizer 会话定制回调：签发前允许项目覆盖会话租户与角色码
+//（如会话租户回填用户主租户、角色经业务表回填而非取凭据归属）。返回 err 时登录失败。
+type MiniAppSessionCustomizer func(ctx context.Context, user *User, cred *WechatAppCredentials) (tenantID uint64, roleCode string, err error)
+
 // MiniAppFlow 小程序微信登录编排壳：把各项目重复的
 // “appid 定位凭据 → 构造 LoginService → code 登录（可选手机号授权）→ 查 openid →
 // Issuer 签发会话”编排沉淀为一次调用；角色解析经 Issuer 的 RoleResolver 承载，
@@ -37,6 +41,7 @@ type MiniAppFlow struct {
 	loginOpts []LoginServiceOption
 	appType  string
 	roleCode string
+	sessionCustomizer MiniAppSessionCustomizer
 }
 
 // MiniAppFlowOption 配置小程序登录编排壳。
@@ -57,6 +62,11 @@ func WithMiniAppRoleCode(roleCode string) MiniAppFlowOption {
 	return func(f *MiniAppFlow) { f.roleCode = roleCode }
 }
 
+// WithMiniAppSessionCustomizer 定制会话租户与角色码（默认取凭据归属租户与 flow 角色码）。
+func WithMiniAppSessionCustomizer(customizer MiniAppSessionCustomizer) MiniAppFlowOption {
+	return func(f *MiniAppFlow) { f.sessionCustomizer = customizer }
+}
+
 // NewMiniAppFlow 创建小程序登录编排壳。
 func NewMiniAppFlow(db *gorm.DB, source WechatAppSource, issuer *Issuer, options ...MiniAppFlowOption) *MiniAppFlow {
 	f := &MiniAppFlow{db: db, source: source, issuer: issuer, appType: "miniapp"}
@@ -68,7 +78,8 @@ func NewMiniAppFlow(db *gorm.DB, source WechatAppSource, issuer *Issuer, options
 
 // MiniAppLoginInput 小程序登录入参。
 type MiniAppLoginInput struct {
-	AppID string // 小程序 appid（定位凭据）
+	// AppID 小程序 appid（定位凭据；官方单小程序场景可空，凭据源回落静态配置）。
+	AppID string
 	Code  string // wx.login code（凭据缺失且带 dev: 前缀时走 identity 开发兜底）
 	// PhoneCode 可选手机号授权 code，非空时走 WechatPhoneLogin（登录同时绑定手机号）；
 	// 该路径必须凭据可用，无 dev 兜底。
@@ -97,7 +108,7 @@ func (f *MiniAppFlow) Login(ctx context.Context, in MiniAppLoginInput) (*MiniApp
 	}
 	appID := strings.TrimSpace(in.AppID)
 	code := strings.TrimSpace(in.Code)
-	if appID == "" || code == "" {
+	if code == "" {
 		return nil, errors.New("缺少小程序登录凭证")
 	}
 	// dev 兜底语义由 client 启用状态与 code 前缀共同决定（identity 内部处理）：
@@ -133,7 +144,16 @@ func (f *MiniAppFlow) Login(ctx context.Context, in MiniAppLoginInput) (*MiniApp
 	if err != nil {
 		return nil, err
 	}
-	result, err := f.issuer.Issue(ctx, user, cred.TenantID, f.roleCode, WithOpenID(openID), WithAppType(f.appType))
+	// 会话定制：默认租户/角色取凭据归属与 flow 配置，项目可经回调覆盖
+	//（如会话租户回填用户主租户、角色经业务表回填）。
+	tenantID, roleCode := cred.TenantID, f.roleCode
+	if f.sessionCustomizer != nil {
+		tenantID, roleCode, err = f.sessionCustomizer(ctx, user, cred)
+		if err != nil {
+			return nil, err
+		}
+	}
+	result, err := f.issuer.Issue(ctx, user, tenantID, roleCode, WithOpenID(openID), WithAppType(f.appType))
 	if err != nil {
 		return nil, err
 	}

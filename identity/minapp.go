@@ -94,13 +94,15 @@ func (f *MiniAppFlow) Login(ctx context.Context, in MiniAppLoginInput) (*MiniApp
 	if appID == "" || code == "" {
 		return nil, errors.New("缺少小程序登录凭证")
 	}
-	// dev 兜底：凭据未接入/不完整且 code 带 dev: 前缀时无客户端继续
-	// （identity 会按 dev-<code> 生成开发 openid 建号），会话租户记 0。
+	// dev 兜底语义由 client 启用状态与 code 前缀共同决定（identity 内部处理）：
+	// 凭据未接入（source 返回 ErrAppNotBound）且 code 带 dev: 前缀时放行建开发号，
+	// 会话租户记 0；凭据已绑定但 secret 未配置时 client 未启用，同样走 dev 兜底，
+	// 会话租户保持凭据归属租户；凭据完整时 dev: code 照常调微信（开发前缀会被拒绝）。
 	cred, err := f.source(ctx, appID)
 	if err != nil && (!errors.Is(err, ErrAppNotBound) || !strings.HasPrefix(code, "dev:")) {
 		return nil, err
 	}
-	if cred == nil || cred.AppSecret == "" || strings.HasPrefix(code, "dev:") {
+	if cred == nil {
 		cred = &WechatAppCredentials{}
 	}
 	// 按请求 appid 构造微信客户端（各小程序独立 appid/secret，openid 天然按 appid 隔离）；

@@ -36,6 +36,7 @@ type MiniAppFlow struct {
 	issuer   *Issuer
 	loginOpts []LoginServiceOption
 	appType  string
+	roleCode string
 }
 
 // MiniAppFlowOption 配置小程序登录编排壳。
@@ -49,6 +50,11 @@ func WithMiniAppServiceOptions(opts ...LoginServiceOption) MiniAppFlowOption {
 // WithMiniAppAppType 指定会话的应用类型维度（默认 "miniapp"）。
 func WithMiniAppAppType(appType string) MiniAppFlowOption {
 	return func(f *MiniAppFlow) { f.appType = appType }
+}
+
+// WithMiniAppRoleCode 指定会话角色码（默认空；C 端用户会话通常传 "user"）。
+func WithMiniAppRoleCode(roleCode string) MiniAppFlowOption {
+	return func(f *MiniAppFlow) { f.roleCode = roleCode }
 }
 
 // NewMiniAppFlow 创建小程序登录编排壳。
@@ -127,7 +133,7 @@ func (f *MiniAppFlow) Login(ctx context.Context, in MiniAppLoginInput) (*MiniApp
 	if err != nil {
 		return nil, err
 	}
-	result, err := f.issuer.Issue(ctx, user, cred.TenantID, "", WithOpenID(openID), WithAppType(f.appType))
+	result, err := f.issuer.Issue(ctx, user, cred.TenantID, f.roleCode, WithOpenID(openID), WithAppType(f.appType))
 	if err != nil {
 		return nil, err
 	}

@@ -30,6 +30,11 @@ type WechatAppSource func(ctx context.Context, appID string) (*WechatAppCredenti
 //（如会话租户回填用户主租户、角色经业务表回填而非取凭据归属）。返回 err 时登录失败。
 type MiniAppSessionCustomizer func(ctx context.Context, user *User, cred *WechatAppCredentials) (tenantID uint64, roleCode string, err error)
 
+// MiniAppSessionIssuer 自管会话签发钩子：注入后 flow 仅完成凭据解析与 code 换
+// openid（dev 兜底语义与 identity 登录一致），用户建档与会话签发交由项目实现，
+// 返回的登录结果由 flow 原样透传。注入后不支持手机号授权登录（PhoneCode 非空报错）。
+type MiniAppSessionIssuer func(ctx context.Context, openID string, cred *WechatAppCredentials) (*MiniAppLoginResult, error)
+
 // MiniAppFlow 小程序微信登录编排壳：把各项目重复的
 // “appid 定位凭据 → 构造 LoginService → code 登录（可选手机号授权）→ 查 openid →
 // Issuer 签发会话”编排沉淀为一次调用；角色解析经 Issuer 的 RoleResolver 承载，
@@ -42,6 +47,7 @@ type MiniAppFlow struct {
 	appType  string
 	roleCode string
 	sessionCustomizer MiniAppSessionCustomizer
+	sessionIssuer MiniAppSessionIssuer
 }
 
 // MiniAppFlowOption 配置小程序登录编排壳。
@@ -65,6 +71,12 @@ func WithMiniAppRoleCode(roleCode string) MiniAppFlowOption {
 // WithMiniAppSessionCustomizer 定制会话租户与角色码（默认取凭据归属租户与 flow 角色码）。
 func WithMiniAppSessionCustomizer(customizer MiniAppSessionCustomizer) MiniAppFlowOption {
 	return func(f *MiniAppFlow) { f.sessionCustomizer = customizer }
+}
+
+// WithMiniAppSessionIssuer 启用自管会话签发（与 Issuer 互斥，注入后 Issuer 不再使用，
+// NewMiniAppFlow 的 issuer 参数可传 nil）。
+func WithMiniAppSessionIssuer(issuer MiniAppSessionIssuer) MiniAppFlowOption {
+	return func(f *MiniAppFlow) { f.sessionIssuer = issuer }
 }
 
 // NewMiniAppFlow 创建小程序登录编排壳。
@@ -96,6 +108,8 @@ type MiniAppLoginResult struct {
 	AppType   string
 	OpenID    string
 	User      *User
+	// RefreshToken 自管会话签发（SessionIssuer 钩子）时的刷新令牌，identity 签发路径为空。
+	RefreshToken string
 }
 
 // Login 执行小程序登录编排：凭据解析 → code 登录 → openid 关联 → 会话签发。
@@ -103,7 +117,7 @@ func (f *MiniAppFlow) Login(ctx context.Context, in MiniAppLoginInput) (*MiniApp
 	if f.source == nil {
 		return nil, errors.New("小程序凭据源未配置")
 	}
-	if f.issuer == nil {
+	if f.issuer == nil && f.sessionIssuer == nil {
 		return nil, errors.New("会话签发器未配置")
 	}
 	appID := strings.TrimSpace(in.AppID)
@@ -125,6 +139,17 @@ func (f *MiniAppFlow) Login(ctx context.Context, in MiniAppLoginInput) (*MiniApp
 	// 按请求 appid 构造微信客户端（各小程序独立 appid/secret，openid 天然按 appid 隔离）；
 	// 凭据为空对象时 client 为 nil，走 identity 的 dev 兜底。
 	client := wechat.NewClient(config.WechatConfig{AppID: cred.AppID, AppSecret: cred.AppSecret})
+	// 自管会话签发：flow 只负责换 openid，建档与会话签发交由项目钩子，结果原样透传。
+	if f.sessionIssuer != nil {
+		if strings.TrimSpace(in.PhoneCode) != "" {
+			return nil, errors.New("自管会话签发不支持手机号授权登录")
+		}
+		openID, err := exchangeOpenID(ctx, code, client)
+		if err != nil {
+			return nil, err
+		}
+		return f.sessionIssuer(ctx, openID, cred)
+	}
 	opts := make([]LoginServiceOption, 0, len(f.loginOpts)+1)
 	opts = append(opts, f.loginOpts...)
 	opts = append(opts, WithWechatClientResolver(func(ctx context.Context) *wechat.Client {
@@ -167,6 +192,27 @@ func (f *MiniAppFlow) Login(ctx context.Context, in MiniAppLoginInput) (*MiniApp
 		OpenID:    openID,
 		User:      user,
 	}, nil
+}
+
+// exchangeOpenID 用登录 code 换取 openid，dev 兜底语义与 identity 登录一致：
+// client 未启用（未配置或 secret 缺失）且 code 带 dev: 前缀时生成 dev- 开发的开发 openid，
+// 否则报 ErrWechatMissing；client 可用时正常调微信换取，openid 为空同样视为未配置。
+func exchangeOpenID(ctx context.Context, code string, client *wechat.Client) (string, error) {
+	if client == nil || !client.Enabled() {
+		if strings.HasPrefix(code, "dev:") {
+			return "dev-" + strings.TrimPrefix(code, "dev:"), nil
+		}
+		return "", ErrWechatMissing
+	}
+	session, err := client.Session(ctx, code)
+	if err != nil {
+		return "", err
+	}
+	openID := strings.TrimSpace(session.OpenID)
+	if openID == "" {
+		return "", ErrWechatMissing
+	}
+	return openID, nil
 }
 
 // latestOpenID 返回用户最近一次绑定的微信 openid（未绑定为空串；查询异常返回错误）。

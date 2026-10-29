@@ -23,6 +23,7 @@ import (
 const (
 	webServiceBaseURL      = "https://apis.map.qq.com"
 	reverseGeocodePath     = "/ws/geocoder/v1"
+	suggestionPath         = "/ws/place/v1/suggestion"
 	reverseGeocodeCacheTTL = 24 * time.Hour
 )
 
@@ -36,10 +37,23 @@ type Result struct {
 	AdCode           string `json:"adcode"`
 }
 
+// Place 定义地点搜索候选结果。
+type Place struct {
+	ID        string  `json:"id"`
+	Title     string  `json:"title"`
+	Address   string  `json:"address"`
+	Province  string  `json:"province"`
+	City      string  `json:"city"`
+	District  string  `json:"district"`
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
+}
+
 // Client 封装腾讯位置服务 WebService API 调用。
 type Client struct {
 	cfg        config.TencentMapConfig
 	httpClient *http.Client
+	baseURL    string
 }
 
 type reverseGeocodeResponse struct {
@@ -56,11 +70,29 @@ type reverseGeocodeResponse struct {
 	} `json:"result"`
 }
 
+type suggestionResponse struct {
+	Status  int    `json:"status"`
+	Message string `json:"message"`
+	Data    []struct {
+		ID       string `json:"id"`
+		Title    string `json:"title"`
+		Address  string `json:"address"`
+		Province string `json:"province"`
+		City     string `json:"city"`
+		District string `json:"district"`
+		Location struct {
+			Lat float64 `json:"lat"`
+			Lng float64 `json:"lng"`
+		} `json:"location"`
+	} `json:"data"`
+}
+
 // NewClient 创建腾讯位置服务客户端。
 func NewClient(cfg config.TencentMapConfig) *Client {
 	return &Client{
 		cfg:        cfg,
 		httpClient: &http.Client{Timeout: 10 * time.Second},
+		baseURL:    webServiceBaseURL,
 	}
 }
 
@@ -91,21 +123,8 @@ func (c *Client) ReverseGeocode(ctx context.Context, latitude, longitude float64
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, safeRequestError(err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
 	var out reverseGeocodeResponse
-	if err := json.Unmarshal(body, &out); err != nil {
+	if err := c.getJSON(ctx, reqURL, &out); err != nil {
 		return nil, err
 	}
 	if out.Status != 0 {
@@ -123,6 +142,60 @@ func (c *Client) ReverseGeocode(ctx context.Context, latitude, longitude float64
 	return result, nil
 }
 
+// Suggestion 关键词搜索候选地点（region 为检索范围，如城市名，空则全国）。
+func (c *Client) Suggestion(ctx context.Context, keyword, region string) ([]Place, error) {
+	if !c.IsConfigured() {
+		return nil, errors.New("腾讯位置服务未配置")
+	}
+	keyword = strings.TrimSpace(keyword)
+	if keyword == "" {
+		return nil, errors.New("keyword 不能为空")
+	}
+	reqURL, err := c.buildSuggestionURL(keyword, region)
+	if err != nil {
+		return nil, err
+	}
+	var out suggestionResponse
+	if err := c.getJSON(ctx, reqURL, &out); err != nil {
+		return nil, err
+	}
+	if out.Status != 0 {
+		return nil, fmt.Errorf("腾讯地点搜索失败: %s", strings.TrimSpace(out.Message))
+	}
+	places := make([]Place, 0, len(out.Data))
+	for _, item := range out.Data {
+		places = append(places, Place{
+			ID:        strings.TrimSpace(item.ID),
+			Title:     strings.TrimSpace(item.Title),
+			Address:   strings.TrimSpace(item.Address),
+			Province:  strings.TrimSpace(item.Province),
+			City:      strings.TrimSpace(item.City),
+			District:  strings.TrimSpace(item.District),
+			Latitude:  item.Location.Lat,
+			Longitude: item.Location.Lng,
+		})
+	}
+	return places, nil
+}
+
+// getJSON 发起 GET 请求并解码 JSON 响应（网络错误不携带 URL，避免 key 或 sig 泄漏）。
+func (c *Client) getJSON(ctx context.Context, reqURL string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return safeRequestError(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(body, out)
+}
+
 // buildReverseGeocodeURL 生成包含签名的腾讯逆地理请求地址。
 func (c *Client) buildReverseGeocodeURL(location string) (string, error) {
 	params := map[string]string{
@@ -134,7 +207,28 @@ func (c *Client) buildReverseGeocodeURL(location string) (string, error) {
 	values.Set("key", params["key"])
 	values.Set("location", params["location"])
 	values.Set("sig", signature)
-	return webServiceBaseURL + reverseGeocodePath + "?" + values.Encode(), nil
+	return c.baseURL + reverseGeocodePath + "?" + values.Encode(), nil
+}
+
+// buildSuggestionURL 生成包含签名的腾讯地点搜索请求地址。
+func (c *Client) buildSuggestionURL(keyword, region string) (string, error) {
+	region = strings.TrimSpace(region)
+	if region == "" {
+		region = "全国"
+	}
+	params := map[string]string{
+		"key":       strings.TrimSpace(c.cfg.WebServiceKey),
+		"keyword":   keyword,
+		"region":    region,
+		"page_size": "8",
+	}
+	signature := buildSignature(suggestionPath, params, strings.TrimSpace(c.cfg.WebServiceSK))
+	values := url.Values{}
+	for key, value := range params {
+		values.Set(key, value)
+	}
+	values.Set("sig", signature)
+	return c.baseURL + suggestionPath + "?" + values.Encode(), nil
 }
 
 // buildSignature 根据腾讯位置服务签名规则计算 GET 请求 sig。

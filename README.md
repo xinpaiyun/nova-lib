@@ -35,7 +35,7 @@
 | `storage` | 本地/S3 兼容对象存储（含临时 URL、对象移动） | ✅ v1.0.0 |
 | `mail` | SMTP 邮件 | ✅ 已迁入 |
 | `alipay` | 支付宝开放平台：OAuth 登录、手机号解密、JSAPI 交易创建/查询、通知验签（RSA2 + AES-CBC，纯标准库） | ✅ v1.1.0 |
-| `tencentmap` | 腾讯位置服务：逆地理编码（sig 签名 + Redis 缓存） | ✅ v1.1.0 |
+| `tencentmap` | 腾讯位置服务：逆地理编码（sig 签名 + Redis 缓存）、关键词地点搜索 | ✅ v1.1.0 |
 | `ocr` | 阿里云 OCR：通用文字 / 身份证 / 行驶证识别（URL 与二进制流） | ✅ v1.1.0 |
 | `openai` | OpenAI 兼容协议：文本与视觉对话（含 token 用量统计） | ✅ v1.1.0 |
 | `shengwang` | 声网：RTC/灵动课堂 token 签发、实时转写任务 | ✅ v1.1.0 |
@@ -45,6 +45,7 @@
 
 | 包 | 说明 | 状态 |
 |---|---|---|
+| `address` | 通用地址服务：经纬度逆地理 + 关键词地点搜索（统一未配置/校验语义与错误文案，底层 `tencentmap` 客户端，沉淀自业务项目 shared/address） | ✅ 已迁入 |
 | `datacipher` | 敏感字段安全统一实现：AES-GCM 字段加解密、HMAC 检索哈希、脱敏（姓名/手机号/企业名等；原 fieldsec 包已并入，密文格式兼容） | ✅ 已迁入 |
 | `queue` | Redis Streams 任务队列与 Worker | ✅ 已迁入 |
 | `events` | 内存 SSE 发布订阅 Hub | ✅ 已迁入 |

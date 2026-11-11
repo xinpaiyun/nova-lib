@@ -4,6 +4,9 @@
 // 数据隔离键统一为 TenantID（列 tenant_id），持有者统一为 HolderID
 // （C 端用户或客户 ID，语义由项目决定），关联单据统一为 Ref{Type, ID, No}，
 // 金额一律为分（int64）。
+//
+// 本包同时承载 C 端会员关系（CustomerMember + CustomerService）：
+// customer_members.id 即储值账户的 HolderID，会员必须关联已注册的 identity.users。
 package member
 
 import (
